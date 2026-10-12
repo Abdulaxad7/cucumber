@@ -1,0 +1,4 @@
+app:
+  # DEV ONLY: local-development JWT secret for the "dev" profile. Never use it in any other environment.
+  # Standard Base64 of 64 random bytes (HS512 minimum). The api-gateway dev profile must use the same value.
+  jwtSecret: 2wvKJaMRAuY+9mMPrChKZqbYJRc4Z6+OQO5ZAoWS6shgMZ0op8cQWfJycolql2Ylt2FObJ94OPPPYPsgpdrGWA==

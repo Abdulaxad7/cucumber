@@ -1,0 +1,9 @@
+jwt:
+  # DEV ONLY: local-development JWT secret for the "dev" profile. Never use it in any other environment.
+  # Must stay identical to app.jwtSecret in auth-service/src/main/resources/application-dev.yaml (D3, D4).
+  secret: 2wvKJaMRAuY+9mMPrChKZqbYJRc4Z6+OQO5ZAoWS6shgMZ0op8cQWfJycolql2Ylt2FObJ94OPPPYPsgpdrGWA==
+
+gateway:
+  cors:
+    # D5: the usual frontend dev-server origins. CORS_ALLOWED_ORIGINS still overrides them.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}

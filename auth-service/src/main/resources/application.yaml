@@ -24,7 +24,10 @@ spring:
 
 
 
+server:
+  port: 8081
+
 app:
-  jwtSecret: some-secret-key-that-is-long-enough
+  jwtSecret: ${JWT_SECRET}
   jwtExpirationInMs: 86400000
 
