@@ -9,12 +9,15 @@ import lombok.Builder;
 public record RegisterRequest(
     @NotBlank(message = "Email cannot be blank")
     @Email(message = "Invalid email format")
+    @Size(max = 254, message = "Email must be at most 254 characters long")
     String email,
 
     @NotBlank(message = "Password cannot be blank")
     @Size(min = 8, message = "Password must be at least 8 characters long")
+    @MaxUtf8Bytes(value = 72, message = "Password must be at most 72 bytes long")
     String password,
 
     @NotBlank(message = "Full name cannot be blank")
+    @Size(max = 100, message = "Full name must be at most 100 characters long")
     String fullName
 ) {}

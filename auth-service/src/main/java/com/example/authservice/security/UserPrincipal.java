@@ -1,5 +1,6 @@
 package com.example.authservice.security;
 
+import com.example.authservice.enums.UserStatus;
 import com.example.authservice.model.User;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -14,12 +15,15 @@ public class UserPrincipal implements UserDetails {
     private String email;
     private String password;
     private Collection<? extends GrantedAuthority> authorities;
+    private UserStatus status;
 
-    public UserPrincipal(UUID id, String email, String password, Collection<? extends GrantedAuthority> authorities) {
+    public UserPrincipal(UUID id, String email, String password, Collection<? extends GrantedAuthority> authorities,
+                         UserStatus status) {
         this.id = id;
         this.email = email;
         this.password = password;
         this.authorities = authorities;
+        this.status = status;
     }
 
     public static UserPrincipal create(User user) {
@@ -29,12 +33,17 @@ public class UserPrincipal implements UserDetails {
                 user.getId(),
                 user.getEmail(),
                 user.getPasswordHash(),
-                Collections.emptyList()
+                Collections.emptyList(),
+                user.getStatus()
         );
     }
 
     public UUID getId() {
         return id;
+    }
+
+    public UserStatus getStatus() {
+        return status;
     }
 
     @Override
@@ -69,7 +78,7 @@ public class UserPrincipal implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        // This should check user.status, but for now, we'll assume enabled.
-        return true;
+        // D4: suspended users can't log in and their tokens stop working; pending users are allowed in phase 1.
+        return status != UserStatus.SUSPENDED;
     }
 }

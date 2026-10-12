@@ -1,10 +1,13 @@
 package com.example.authservice.configuration;
 
 import com.example.authservice.enums.OpenEndpoints;
+import com.example.authservice.security.ProblemAccessDeniedHandler;
+import com.example.authservice.security.ProblemAuthenticationEntryPoint;
 import com.example.authservice.service.impl.CustomUserDetailsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -27,6 +30,8 @@ public class SecurityConfig {
 
     private final CustomUserDetailsService userDetailsService;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ProblemAuthenticationEntryPoint authenticationEntryPoint;
+    private final ProblemAccessDeniedHandler accessDeniedHandler;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -44,8 +49,14 @@ public class SecurityConfig {
                 .cors(AbstractHttpConfigurer::disable)
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/error").permitAll()
+                        // D7: exactly the three public operations of the gateway's public list.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login",
+                                "/api/auth/invitations/{token}/accept").permitAll()
                         .requestMatchers(Arrays.stream(OpenEndpoints.values()).map(OpenEndpoints::getUrl).toArray(String[]::new)).permitAll()
                         .anyRequest().authenticated()
                 );

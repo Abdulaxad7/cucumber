@@ -1,0 +1,34 @@
+package com.example.authservice.security;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerExceptionResolver;
+
+import java.io.IOException;
+
+/**
+ * Answers an authenticated request that the security chain refuses with a 403 Problem {@code FORBIDDEN} (D2),
+ * rendered by Spring MVC's exception resolution like every other error.
+ */
+@Component
+public class ProblemAccessDeniedHandler implements AccessDeniedHandler {
+
+    private final HandlerExceptionResolver handlerExceptionResolver;
+
+    public ProblemAccessDeniedHandler(
+            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
+        this.handlerExceptionResolver = handlerExceptionResolver;
+    }
+
+    @Override
+    public void handle(HttpServletRequest request, HttpServletResponse response,
+                       AccessDeniedException accessDeniedException) throws IOException {
+        if (handlerExceptionResolver.resolveException(request, response, null, accessDeniedException) == null) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN);
+        }
+    }
+}
