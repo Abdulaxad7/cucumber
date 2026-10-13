@@ -22,36 +22,20 @@ import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-/**
- * Maps gateway failures to Problem Details (D6). Responses produced by downstream services never pass
- * through here: the gateway forwards them unchanged.
- */
 @RestControllerAdvice
 public class GatewayExceptionHandler extends ResponseEntityExceptionHandler {
 
-    /**
-     * Request attribute holding the gateway's own response headers ({@link HttpHeaders}), recorded when a downstream
-     * response arrives and before its status and headers are written to the client. If the downstream call fails
-     * after that, the downstream status and headers are discarded and these headers are restored, so the Problem
-     * response carries nothing from the failed downstream response.
-     */
     public static final String GATEWAY_RESPONSE_HEADERS_ATTRIBUTE =
             GatewayExceptionHandler.class.getName() + ".gatewayResponseHeaders";
 
     private static final Logger log = LoggerFactory.getLogger(GatewayExceptionHandler.class);
 
-    /** Missing, invalid or expired token on a protected path; raised through the authentication entry point. */
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ProblemDetail> handleAuthenticationFailure(AuthenticationException ex,
                                                                      HttpServletRequest request) {
         return problem(HttpStatus.UNAUTHORIZED, GatewayProblems.UNAUTHORIZED_DETAIL, request);
     }
 
-    /**
-     * I/O failure calling a downstream service, or an invalid downstream response, whether it happens before or
-     * after the response headers arrive (AC-4.6, AC-4.7). Logged at WARN with the route, the status and the failure
-     * type only: the message is never logged because it can contain the downstream URL.
-     */
     @ExceptionHandler(ResourceAccessException.class)
     public ResponseEntity<ProblemDetail> handleDownstreamFailure(ResourceAccessException ex,
                                                                  HttpServletRequest request,
@@ -63,10 +47,6 @@ public class GatewayExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(failure.status(), failure.detail(), request);
     }
 
-    /**
-     * Spring Cloud Gateway reports a failure while it copies the downstream response body wrapped in a
-     * {@link ServletException}. A wrapped downstream failure is handled as such; anything else is unexpected.
-     */
     @ExceptionHandler(ServletException.class)
     public ResponseEntity<ProblemDetail> handleWrappedFailure(ServletException ex, HttpServletRequest request,
                                                               HttpServletResponse response) {
@@ -94,7 +74,6 @@ public class GatewayExceptionHandler extends ResponseEntityExceptionHandler {
         return noRoute(request);
     }
 
-    /** Gives the other Spring MVC errors (for example 405) the same type, instance and requestId fields. */
     @Override
     protected @Nullable ResponseEntity<Object> handleExceptionInternal(Exception ex, @Nullable Object body,
             HttpHeaders headers, HttpStatusCode statusCode, WebRequest request) {
@@ -114,10 +93,6 @@ public class GatewayExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(status).body(GatewayProblems.of(status, detail, request));
     }
 
-    /**
-     * Clears the downstream status and headers written before the failure and restores the gateway's own headers
-     * (request ID, CORS). Once the response is committed it can no longer change (FU-4).
-     */
     private static void discardDownstreamResponse(HttpServletRequest request, HttpServletResponse response) {
         if (request.getAttribute(GATEWAY_RESPONSE_HEADERS_ATTRIBUTE) instanceof HttpHeaders gatewayHeaders
                 && !response.isCommitted()) {
@@ -126,7 +101,6 @@ public class GatewayExceptionHandler extends ResponseEntityExceptionHandler {
         }
     }
 
-    /** The I/O exception the HTTP client reported, for example ConnectException or HttpTimeoutException. */
     private static String ioFailureName(ResourceAccessException failure) {
         Throwable cause = failure.getCause() != null ? failure.getCause() : failure;
         return cause.getClass().getSimpleName();

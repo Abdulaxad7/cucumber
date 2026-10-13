@@ -16,13 +16,6 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
 
-/**
- * Applies the CORS rules of Spring's {@link DefaultCorsProcessor}, but answers a refused CORS request
- * (a preflight, or an actual request whose {@code Origin} is not allowed) with the gateway's 403
- * Problem Details body instead of Spring's plain-text one (D5, D6). The body is rendered by the shared
- * error handling in {@code org.apigateway.exception}. A refused request is never forwarded and carries
- * no {@code Access-Control-Allow-*} headers.
- */
 @Component
 public class ProblemDetailCorsProcessor implements CorsProcessor {
 
@@ -48,12 +41,10 @@ public class ProblemDetailCorsProcessor implements CorsProcessor {
         return false;
     }
 
-    /** Spring's CORS checks, with the rejection body left to the enclosing processor. */
     private static final class SilentlyRejectingCorsProcessor extends DefaultCorsProcessor {
 
         @Override
         protected void rejectRequest(ServerHttpResponse response) {
-            // Intentionally empty: ProblemDetailCorsProcessor writes the 403 response.
         }
     }
 }

@@ -14,20 +14,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.Optional;
 
-/**
- * Tells services which user made a request (D4, contract C3). Every client-supplied {@code X-User-Id}, in any
- * letter case, is removed on every request. On authenticated (protected) requests the header is set to the
- * validated token's {@code sub}, read from the security context rather than from the token. The value is
- * informational: services must not authorize on it.
- * <p>
- * Runs inside the security filter chain after authorization. The user ID is also stored as a request
- * attribute for the access log.
- */
 public class IdentityHeaderFilter extends OncePerRequestFilter {
 
     public static final String HEADER_NAME = "X-User-Id";
 
-    /** Request attribute holding the authenticated user ID; absent on public and rejected requests. */
     public static final String USER_ID_ATTRIBUTE = IdentityHeaderFilter.class.getName() + ".userId";
 
     private final AuthenticationTrustResolver trustResolver = new AuthenticationTrustResolverImpl();

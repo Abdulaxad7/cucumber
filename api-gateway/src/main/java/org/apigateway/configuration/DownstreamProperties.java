@@ -8,11 +8,6 @@ import org.springframework.validation.annotation.Validated;
 import java.net.URI;
 import java.time.Duration;
 
-/**
- * Downstream service locations and HTTP-client timeouts (D3, D6).
- * The route table and the HTTP client settings in {@code application.yaml} read these values,
- * so invalid values stop the gateway at startup.
- */
 @Validated
 @ConfigurationProperties(prefix = "gateway.downstream")
 public record DownstreamProperties(

@@ -22,17 +22,9 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Authenticates protected requests that carry exactly one {@code Authorization} header with a valid
- * {@code Bearer <jwt>} (D4). A missing or invalid token, or more than one {@code Authorization} header (AC-2.9),
- * leaves the request unauthenticated, and the authorization rules then answer 401.
- * Public operations are skipped entirely: their token is not evaluated and is forwarded unchanged.
- * The header itself is never modified, so services receive it byte for byte.
- */
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    /** RFC 6750 section 2.1: the scheme is case-insensitive, the token is a b64token. */
     private static final Pattern BEARER_CREDENTIALS =
             Pattern.compile("^Bearer (?<token>[A-Za-z0-9\\-._~+/]+=*)$", Pattern.CASE_INSENSITIVE);
 
@@ -55,10 +47,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         chain.doFilter(request, response);
     }
 
-    /**
-     * RFC 9110 allows one {@code Authorization} header. With several, a service could read a different one from the
-     * one the gateway checked, so none of them authenticates the request.
-     */
     private static Optional<String> bearerToken(HttpServletRequest request) {
         Enumeration<String> values = request.getHeaders(HttpHeaders.AUTHORIZATION);
         List<String> authorizations = values == null ? List.of() : Collections.list(values);

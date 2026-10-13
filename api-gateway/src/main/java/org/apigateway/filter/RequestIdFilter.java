@@ -15,28 +15,18 @@ import java.io.IOException;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/**
- * Assigns every request its request ID (D7). A well-formed client {@code X-Request-Id} is kept;
- * anything else is replaced by a generated UUID. The ID is forwarded downstream, returned on the response,
- * stored as a request attribute for error bodies and the access log, and put in the logging MDC.
- * <p>
- * Runs before Spring Security, so requests rejected with 401 get an ID too (P3).
- */
 @Component
 @Order(RequestIdFilter.ORDER)
 public class RequestIdFilter extends OncePerRequestFilter {
 
-    /** Before the Spring Security filter chain. */
     public static final int ORDER = SecurityFilterProperties.DEFAULT_FILTER_ORDER - 2;
 
     public static final String HEADER_NAME = "X-Request-Id";
 
-    /** Request attribute holding the effective request ID. */
     public static final String ATTRIBUTE = RequestIdFilter.class.getName() + ".requestId";
 
     public static final String MDC_KEY = "requestId";
 
-    /** Client values that are kept; anything else could be used for log injection. */
     static final Pattern VALID_CLIENT_REQUEST_ID = Pattern.compile("^[A-Za-z0-9._-]{1,128}$");
 
     @Override

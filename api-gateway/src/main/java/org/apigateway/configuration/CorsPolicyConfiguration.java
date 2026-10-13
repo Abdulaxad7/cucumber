@@ -9,10 +9,6 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-/**
- * CORS policy (D5). The gateway is the only CORS authority: the policy below applies to every path,
- * and CORS headers sent by downstream services are dropped so a response never carries two.
- */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(CorsProperties.class)
 public class CorsPolicyConfiguration {
@@ -35,7 +31,6 @@ public class CorsPolicyConfiguration {
         return source;
     }
 
-    /** Removes CORS headers from downstream responses before the gateway copies them (AC-6.6). */
     @Bean
     public HttpHeadersFilter.ResponseHttpHeadersFilter downstreamCorsHeadersFilter() {
         return (downstreamHeaders, response) -> {

@@ -10,10 +10,6 @@ import org.springframework.validation.annotation.Validated;
 
 import java.util.List;
 
-/**
- * Operations the gateway serves or forwards without a token (D2, D4). Matching is by method and path
- * pattern; every other request is protected.
- */
 @Validated
 @ConfigurationProperties(prefix = "gateway.security")
 public record PublicOperationsProperties(

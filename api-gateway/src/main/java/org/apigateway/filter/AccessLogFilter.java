@@ -25,33 +25,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Writes exactly one access log entry per request, including rejected ones (D7): request ID, method, path,
- * status, duration in milliseconds, the target service (only when a route handled the request) and the user ID
- * (only on authenticated protected requests). Bodies, query strings, {@code Authorization} values and tokens are
- * never logged, and the invitation token path segment is masked.
- * <p>
- * Runs inside the request ID filter, so entries carry the ID, and before Spring Security, so 401 and refused
- * CORS requests are logged too (P3).
- */
 @Component
 @Order(AccessLogFilter.ORDER)
 public class AccessLogFilter extends OncePerRequestFilter {
 
     public static final int ORDER = RequestIdFilter.ORDER + 1;
 
-    /** Logger name operators can route or tune separately from application logs. */
     public static final String LOGGER_NAME = "org.apigateway.access";
 
-    /** Route metadata key naming the target service in {@code application.yaml}. */
     static final String SERVICE_METADATA_KEY = "service";
 
     static final String MASK = "***";
 
-    /**
-     * An invitation token grants org membership, so its path segment is never logged: it is the segment that
-     * follows these resolved segments (D7).
-     */
     private static final List<String> INVITATION_TOKEN_PARENT_SEGMENTS = List.of("api", "auth", "invitations");
 
     private static final String SEGMENT_SEPARATOR = "/";
@@ -96,12 +81,6 @@ public class AccessLogFilter extends OncePerRequestFilter {
         return entry.toString();
     }
 
-    /**
-     * {@code getRequestURI()} excludes the query string. Every segment that holds an invitation token is replaced by
-     * {@value #MASK}, whatever form the path takes (AC-7.5, AC-7.7): segments are compared percent-decoded, without
-     * path parameters and in any letter case, with empty and dot segments resolved, so encoded, duplicate-slash and
-     * dot-segment paths are masked too. All other segments are logged as received.
-     */
     static String maskedPath(String requestUri) {
         String[] segments = requestUri.split(SEGMENT_SEPARATOR, -1);
         List<String> resolvedSegments = new ArrayList<>();
@@ -130,7 +109,6 @@ public class AccessLogFilter extends OncePerRequestFilter {
                 .equals(INVITATION_TOKEN_PARENT_SEGMENTS);
     }
 
-    /** The segment as a server compares it: without path parameters, percent-decoded and in lower case. */
     private static String comparableSegment(String rawSegment) {
         int parametersStart = rawSegment.indexOf(PATH_PARAMETERS_START);
         String segment = parametersStart < 0 ? rawSegment : rawSegment.substring(0, parametersStart);
@@ -141,7 +119,6 @@ public class AccessLogFilter extends OncePerRequestFilter {
         try {
             return UriUtils.decode(segment, StandardCharsets.UTF_8);
         } catch (IllegalArgumentException malformedEncoding) {
-            // No server reads a malformed escape as a known segment, so the segment is compared as received.
             return segment;
         }
     }

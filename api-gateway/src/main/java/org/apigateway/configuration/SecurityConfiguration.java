@@ -23,12 +23,6 @@ import org.springframework.web.filter.CorsFilter;
 
 import java.util.List;
 
-/**
- * Edge authentication (D4): stateless, CSRF disabled, deny by default. Only the configured public operations
- * pass without a token; every other request needs a valid bearer token or gets 401. The gateway does not
- * authorize: services keep their role checks. CORS (D5) is applied before authentication, so preflights need
- * no token and 401 responses carry CORS headers for allowed origins.
- */
 @Configuration
 @EnableConfigurationProperties({JwtProperties.class, PublicOperationsProperties.class})
 public class SecurityConfiguration {
@@ -50,7 +44,6 @@ public class SecurityConfiguration {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(authenticationEntryPoint))
                 .authorizeHttpRequests(auth -> auth
-                        // Container error dispatches keep the status of the request that failed instead of turning into 401.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(publicOperations).permitAll()
                         .anyRequest().authenticated())
@@ -60,7 +53,6 @@ public class SecurityConfiguration {
         return http.build();
     }
 
-    /** The filter that {@code http.cors()} would add, with the gateway's Problem Details refusal (D5). */
     private static CorsFilter corsFilter(CorsConfigurationSource source, CorsProcessor processor) {
         CorsFilter corsFilter = new CorsFilter(source);
         corsFilter.setCorsProcessor(processor);

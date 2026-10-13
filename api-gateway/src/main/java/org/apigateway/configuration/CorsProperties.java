@@ -9,10 +9,6 @@ import org.springframework.validation.annotation.Validated;
 import java.time.Duration;
 import java.util.List;
 
-/**
- * The gateway's CORS policy (D5). Allowed origins come from {@code CORS_ALLOWED_ORIGINS} and are exact
- * origins: wildcards and origin patterns are rejected at startup. Credentials are never allowed.
- */
 @Validated
 @ConfigurationProperties(prefix = "gateway.cors")
 public record CorsProperties(

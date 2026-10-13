@@ -9,19 +9,11 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 
-/**
- * Request view in which every client-supplied value of one header (any letter case) is hidden and,
- * optionally, replaced by a single gateway-controlled value. The gateway forwards the headers it sees
- * through this view, so the replacement is what downstream services receive.
- */
 final class HeaderOverridingRequest extends HttpServletRequestWrapper {
 
     private final String headerName;
     private final @Nullable String value;
 
-    /**
-     * @param value the only value exposed for {@code headerName}, or {@code null} to remove the header
-     */
     HeaderOverridingRequest(HttpServletRequest request, String headerName, @Nullable String value) {
         super(request);
         this.headerName = headerName;
