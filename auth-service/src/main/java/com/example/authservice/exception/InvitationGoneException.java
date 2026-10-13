@@ -1,9 +1,5 @@
 package com.example.authservice.exception;
 
-/**
- * 410: the invitation can no longer be accepted, because it was already accepted ({@code INVITATION_ALREADY_ACCEPTED}),
- * revoked ({@code INVITATION_REVOKED}) or has expired ({@code INVITATION_EXPIRED}).
- */
 public class InvitationGoneException extends ApiException {
 
     private InvitationGoneException(ErrorCode code, String detail) {

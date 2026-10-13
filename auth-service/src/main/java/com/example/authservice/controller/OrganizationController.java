@@ -33,10 +33,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class OrganizationController {
 
-    /**
-     * D11: at least ADMIN to act on someone else; any member may act on themselves (leave, or get SELF_ROLE_CHANGE).
-     * Business rules (ceiling, self, last owner) are checked in the service.
-     */
     private static final String ADMIN_OR_SELF = "@orgGuard.hasRole(#orgId, authentication, 'ADMIN')"
             + " or (@orgGuard.isMember(#orgId, authentication) and #userId.equals(principal.id))";
 
@@ -49,7 +45,6 @@ public class OrganizationController {
             @AuthenticationPrincipal UserPrincipal principal) {
 
         OrganizationResponse organization = organizationService.createOrganization(request, principal.getId());
-        // P10: a relative Location, never built from the request host.
         return ResponseEntity.created(URI.create("/api/orgs/" + organization.id())).body(organization);
     }
 

@@ -103,7 +103,7 @@ class QaAuthorizationMatrixTest {
         if (status == 201) {
             assertThat(result.getResponse().getStatus()).isEqualTo(201);
             assertThat(invitationRepository.findAll()).singleElement()
-                    .satisfies(invitation -> assertThat(invitation.getRole()).isEqualTo(role.name()));
+                    .satisfies(invitation -> assertThat(invitation.getRole()).isEqualTo(role));
         } else {
             assertProblem(result, status, code, path);
             assertThat(invitationRepository.findAll()).isEmpty();

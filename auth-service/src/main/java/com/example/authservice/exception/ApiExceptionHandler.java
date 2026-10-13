@@ -36,12 +36,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/**
- * Turns every error auth-service produces into an RFC 9457 Problem with a stable {@code code} (D2, P6).
- * Spring MVC's own exceptions (unreadable body, 404, 405, 415, type mismatch, validation) go through
- * {@link ResponseEntityExceptionHandler} and get the same members. Bodies never contain exception messages,
- * class names, SQL or stack traces.
- */
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
@@ -61,13 +55,29 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    /** A field that failed Bean Validation, listed in the Problem's {@code errors} member. */
     record InvalidField(String field, String message) {
     }
+
+    private static final Comparator<InvalidField> INVALID_FIELD_ORDER =
+            Comparator.comparing(InvalidField::field, Comparator.nullsFirst(Comparator.<String>naturalOrder()))
+                    .thenComparing(InvalidField::message, Comparator.nullsFirst(Comparator.naturalOrder()));
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ProblemDetail> handleApiException(ApiException ex, HttpServletRequest request) {
         return problem(ex.code(), ex.detail(), request);
+    }
+
+    @ExceptionHandler(RequestValidationException.class)
+    public ResponseEntity<ProblemDetail> handleRequestValidation(RequestValidationException ex,
+                                                                 HttpServletRequest request) {
+        List<InvalidField> fields = new ArrayList<>();
+        ex.violations().forEach(violation -> fields.add(new InvalidField(violation.field(), violation.message())));
+        fields.sort(INVALID_FIELD_ORDER);
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(ErrorCode.VALIDATION_FAILED.status(),
+                VALIDATION_FAILED_DETAIL);
+        problem.setProperty(Problems.ERRORS_PROPERTY, fields);
+        return ResponseEntity.status(ErrorCode.VALIDATION_FAILED.status())
+                .body(Problems.completed(problem, ErrorCode.VALIDATION_FAILED, request));
     }
 
     @ExceptionHandler(EmailAlreadyExistsException.class)
@@ -82,29 +92,23 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(ErrorCode.ROLE_CEILING, detail, request);
     }
 
-    /**
-     * Login failures: a wrong password, an unknown email and a suspended account get the same answer (AC-2.4, AC-2.6).
-     */
     @ExceptionHandler({BadCredentialsException.class, AccountStatusException.class})
     public ResponseEntity<ProblemDetail> handleInvalidCredentials(AuthenticationException ex,
                                                                   HttpServletRequest request) {
         return withBearerChallenge(problem(ErrorCode.INVALID_CREDENTIALS, INVALID_CREDENTIALS_DETAIL, request));
     }
 
-    /** Any other authentication failure, including the one the security entry point reports. */
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ProblemDetail> handleUnauthenticated(AuthenticationException ex,
                                                                HttpServletRequest request) {
         return withBearerChallenge(problem(ErrorCode.UNAUTHENTICATED, UNAUTHENTICATED_DETAIL, request));
     }
 
-    /** Includes Spring Security 7's {@code AuthorizationDeniedException} from {@code @PreAuthorize}. */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
         return problem(ErrorCode.FORBIDDEN, FORBIDDEN_DETAIL, request);
     }
 
-    /** Its message contains SQL, so only the type is logged. */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(DataIntegrityViolationException ex,
                                                                       HttpServletRequest request) {
@@ -112,11 +116,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(ErrorCode.CONFLICT, CONFLICT_DETAIL, request);
     }
 
-    /**
-     * AC-1.9: a lock that can't be acquired in time. {@code EntityManager.find} with a lock mode throws the JPA types
-     * untranslated; repositories throw Spring's {@link PessimisticLockingFailureException} and its subclasses
-     * (including {@code CannotAcquireLockException}). Logged at WARN without the stack trace.
-     */
     @ExceptionHandler({LockTimeoutException.class, PessimisticLockException.class,
             PessimisticLockingFailureException.class})
     public ResponseEntity<ProblemDetail> handleLockFailure(RuntimeException ex, HttpServletRequest request) {
@@ -124,10 +123,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(ErrorCode.CONFLICT, LOCK_CONFLICT_DETAIL, request);
     }
 
-    /**
-     * Anything unexpected: logged once at ERROR with the stack trace. The path is not logged because it can contain
-     * an invitation token.
-     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest request) {
         log.error("Unexpected error while handling a {} request", request.getMethod(), ex);
@@ -146,7 +141,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return notFound(request);
     }
 
-    /** Gives every Spring MVC error the D2 members and code. */
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(Exception ex, Object body, HttpHeaders headers,
                                                              HttpStatusCode statusCode, WebRequest request) {
@@ -206,8 +200,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 }
             }
         }
-        fields.sort(Comparator.comparing(InvalidField::field, Comparator.nullsFirst(Comparator.naturalOrder()))
-                .thenComparing(InvalidField::message, Comparator.nullsFirst(Comparator.naturalOrder())));
+        fields.sort(INVALID_FIELD_ORDER);
         return fields;
     }
 

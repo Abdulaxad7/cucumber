@@ -35,5 +35,4 @@ public class AuditLog {
 
     private LocalDateTime createdAt;
 
-    // Getters and Setters
 }

@@ -9,10 +9,8 @@ import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-
 @Configuration
 public class OpenApiConfiguration {
-
 
     @Bean
     public OpenAPI openAPI() {
@@ -21,7 +19,6 @@ public class OpenApiConfiguration {
                         .addSecuritySchemes("bearerAuth",
                                 new SecurityScheme()
                                         .type(SecurityScheme.Type.HTTP)
-                                        .type(SecurityScheme.Type.OAUTH2)
                                         .scheme("bearer")
                                         .bearerFormat("JWT")))
                 .addSecurityItem(new SecurityRequirement().addList("bearerAuth"))

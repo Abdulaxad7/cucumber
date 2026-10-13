@@ -39,6 +39,4 @@ public class ProjectMembership {
 
     private LocalDateTime createdAt;
 
-    // Getters and Setters
 }
-

@@ -8,12 +8,6 @@ import java.net.URI;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
-/**
- * Builds the RFC 9457 body of every auth-service error (D2): {@code type} about:blank, {@code title} (the reason
- * phrase), {@code status}, {@code detail}, {@code instance} (the path without query string), {@code code}, and
- * {@code requestId} when the request carries a valid {@code X-Request-Id}. The request ID is only ever echoed in
- * the body, never as a response header.
- */
 public final class Problems {
 
     public static final String REQUEST_ID_HEADER = "X-Request-Id";
@@ -31,10 +25,6 @@ public final class Problems {
         return completed(ProblemDetail.forStatusAndDetail(code.status(), detail), code, request);
     }
 
-    /**
-     * Fills in the contract members of a Problem, including one created by Spring MVC: {@code type} and
-     * {@code title} when unset, {@code instance}, {@code code} and {@code requestId}.
-     */
     public static ProblemDetail completed(ProblemDetail problem, ErrorCode code, HttpServletRequest request) {
         if (problem.getType() == null) {
             problem.setType(ABOUT_BLANK);
@@ -49,7 +39,7 @@ public final class Problems {
         return problem;
     }
 
-    static Optional<String> requestId(HttpServletRequest request) {
+    public static Optional<String> requestId(HttpServletRequest request) {
         String requestId = request.getHeader(REQUEST_ID_HEADER);
         if (requestId == null || !VALID_REQUEST_ID.matcher(requestId).matches()) {
             return Optional.empty();

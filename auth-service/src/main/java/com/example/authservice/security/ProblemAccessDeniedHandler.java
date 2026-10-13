@@ -10,10 +10,6 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
 
-/**
- * Answers an authenticated request that the security chain refuses with a 403 Problem {@code FORBIDDEN} (D2),
- * rendered by Spring MVC's exception resolution like every other error.
- */
 @Component
 public class ProblemAccessDeniedHandler implements AccessDeniedHandler {
 

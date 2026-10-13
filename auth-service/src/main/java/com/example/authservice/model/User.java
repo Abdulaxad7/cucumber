@@ -41,6 +41,4 @@ public class User {
 
     private LocalDateTime updatedAt;
 
-    // Getters and Setters
 }
-

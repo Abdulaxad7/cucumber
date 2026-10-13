@@ -1,6 +1,5 @@
 package com.example.authservice.exception;
 
-/** 404 {@code MEMBER_NOT_FOUND}: the target user isn't a member of this organization (or doesn't exist). */
 public class MemberNotFoundException extends ApiException {
 
     public MemberNotFoundException() {

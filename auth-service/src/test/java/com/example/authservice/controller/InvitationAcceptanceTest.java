@@ -550,7 +550,7 @@ class InvitationAcceptanceTest {
         invitationRepository.save(Invitation.builder()
                 .email(email)
                 .organization(organizationRepository.findById(acme.orgId()).orElseThrow())
-                .role(role.name())
+                .role(role)
                 .invitedBy(acme.ben())
                 .token(token)
                 .status(InvitationStatus.PENDING)

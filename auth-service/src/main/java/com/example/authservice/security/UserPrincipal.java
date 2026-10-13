@@ -27,8 +27,6 @@ public class UserPrincipal implements UserDetails {
     }
 
     public static UserPrincipal create(User user) {
-        // For now, we don't have specific roles as GrantedAuthorities,
-        // as RBAC is handled by guards.
         return new UserPrincipal(
                 user.getId(),
                 user.getEmail(),
@@ -78,7 +76,6 @@ public class UserPrincipal implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        // D4: suspended users can't log in and their tokens stop working; pending users are allowed in phase 1.
         return status != UserStatus.SUSPENDED;
     }
 }

@@ -33,6 +33,4 @@ public class Organization {
 
     private LocalDateTime createdAt;
 
-    // Getters and Setters
 }
-

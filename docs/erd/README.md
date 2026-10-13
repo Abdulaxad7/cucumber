@@ -6,7 +6,8 @@
 - **dbdiagram.io:** paste the file into https://dbdiagram.io/d. Tables are grouped by owning service.
 - **IDE:** use a DBML plugin (VS Code "DBML Language" or "vscode-dbml"; IntelliJ "DBML" / "Database Markup Language") for highlighting and preview.
 - **Validate or turn it into SQL:** run `npx -p @dbml/cli dbml2sql /Users/uDevs/IdeaProjects/cucumber/docs/erd/cucumber.dbml --postgres` from an empty directory under `/tmp`.
-- **Last validation (2026-10-12, main session):** `npx -p @dbml/cli dbml2sql --postgres` exited 0 and produced 22 tables, 13 enums and 26 foreign keys.
+- **Last validation (2026-10-13, main session, after the 2026-10-13 edit):** `npx -p @dbml/cli dbml2sql --postgres` exited 0 and produced 22 tables, 13 enums and 26 foreign keys. The trailing `//` comment on the `invitations.project_id` Ref parsed fine. That edit added `projects.archived_at` and changed notes.
+- Previous validation (2026-10-12, main session): exit 0, 22 tables, 13 enums, 26 foreign keys.
 
 ## Legend
 | Marker | Meaning |
@@ -14,6 +15,7 @@
 | Blue header, table note starts with `as-built` | Matches the JPA entities in `auth-service/src/main/java/com/example/authservice/model/` as of the date in the Project note. |
 | Orange header, note starts with `proposed — approved design (2026-10-12), not yet implemented` | Domain design by pm, approved by the user (decisions below). Nothing is built yet. |
 | `proposed (auth-service phase 1)` | An entity change planned in `docs/specs/auth-service.md` but not in code yet. There are none today, because phase 1 leaves every entity unchanged. |
+| `proposed (auth-service-projects)` | An entity change planned in `docs/specs/auth-service-projects.md` (Ready, approved by the user 2026-10-13), not in code yet: `projects.secret_token` removed, `projects.archived_at` added (E31), `invitations.project_id` and its Ref removed, `invitations.org_id` required (E36), and `invitations.role` typed as `organization_role` (E37). Columns to be removed or retyped keep their as-built line, with a note saying what will change. New columns are added with the marker. backend-swe updates the lines and drops the marker when the change lands. |
 | `references <service>.<table>.id (by ID, no FK)` | A cross-service link. Services never share foreign keys. |
 
 `TableGroup`s show the owning service: `auth_service`, `scenario_service` and `report_service` (see ERD-D2).

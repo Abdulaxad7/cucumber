@@ -5,9 +5,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import lombok.Builder;
 
-@Builder
 public record InviteMemberRequest(
         @NotBlank @Email @Size(max = 254, message = "Email must be at most 254 characters long") String email,
         @NotNull OrganizationRole role

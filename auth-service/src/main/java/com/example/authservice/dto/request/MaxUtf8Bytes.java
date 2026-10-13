@@ -12,10 +12,6 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.nio.charset.StandardCharsets;
 
-/**
- * The annotated string is at most {@link #value()} bytes long in UTF-8 (A6). BCrypt only accepts passwords of at most
- * 72 bytes, so a character count isn't enough. {@code null} is valid; combine with {@code @NotBlank} to require a value.
- */
 @Documented
 @Target({ElementType.FIELD, ElementType.PARAMETER, ElementType.RECORD_COMPONENT})
 @Retention(RetentionPolicy.RUNTIME)

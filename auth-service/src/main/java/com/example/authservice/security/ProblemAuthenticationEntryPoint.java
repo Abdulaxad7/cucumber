@@ -12,11 +12,6 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
 
-/**
- * Answers a protected request without valid credentials with a 401 Problem {@code UNAUTHENTICATED} and a
- * {@code WWW-Authenticate: Bearer} challenge (D2). The body is rendered by Spring MVC's exception resolution,
- * so it has the same format as every other error.
- */
 @Component
 public class ProblemAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
@@ -33,7 +28,6 @@ public class ProblemAuthenticationEntryPoint implements AuthenticationEntryPoint
     public void commence(HttpServletRequest request, HttpServletResponse response,
                          AuthenticationException authException) throws IOException {
         response.setHeader(HttpHeaders.WWW_AUTHENTICATE, BEARER_CHALLENGE);
-        // Always "authentication required", whatever the original exception was (for example never a login failure).
         AuthenticationException required =
                 new InsufficientAuthenticationException("Authentication is required", authException);
         if (handlerExceptionResolver.resolveException(request, response, null, required) == null) {

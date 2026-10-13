@@ -9,6 +9,7 @@ import com.example.authservice.exception.EmailAlreadyExistsException;
 import com.example.authservice.model.User;
 import com.example.authservice.repository.UserRepository;
 import com.example.authservice.service.AuthService;
+import com.example.authservice.util.EmailNormalizer;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.exception.ConstraintViolationException;
 import org.hibernate.exception.ConstraintViolationException.ConstraintKind;
@@ -16,8 +17,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -25,13 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
-    /** BCrypt reads only the first 72 bytes of a password; no account can have a longer one (E17). */
     private static final int MAX_PASSWORD_BYTES = 72;
 
     private final AuthenticationManager authenticationManager;
@@ -42,7 +39,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public UserResponse register(RegisterRequest registerRequest) {
-        String email = normalizeEmail(registerRequest.email());
+        String email = EmailNormalizer.normalize(registerRequest.email());
         userRepository.findByEmail(email).ifPresent(u -> {
             throw new EmailAlreadyExistsException("Email already exists: " + email);
         });
@@ -57,7 +54,6 @@ public class AuthServiceImpl implements AuthService {
 
         User savedUser;
         try {
-            // AC-2.11: flush now, so a concurrent registration of the same email fails here and not at commit.
             savedUser = userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException ex) {
             if (isUniqueViolation(ex)) {
@@ -72,19 +68,16 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public LoginResponse login(LoginRequest loginRequest) {
-        String email = normalizeEmail(loginRequest.email());
-        // AC-2.10: BCrypt would ignore the bytes after the 72nd, so a longer password can never be right.
+        String email = EmailNormalizer.normalize(loginRequest.email());
         if (loginRequest.password().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) {
             throw new BadCredentialsException("Bad credentials");
         }
-        Authentication authentication = authenticationManager.authenticate(
+        authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
                         email,
                         loginRequest.password()
                 )
         );
-
-        SecurityContextHolder.getContext().setAuthentication(authentication);
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
@@ -93,11 +86,6 @@ public class AuthServiceImpl implements AuthService {
         return new LoginResponse(token);
     }
 
-    /**
-     * Whether Hibernate classified the violation as a unique constraint (from the dialect's SQLState and error code,
-     * not from the message). The users table has no unique constraint besides the generated id and the email, so on
-     * this insert it is the email.
-     */
     private static boolean isUniqueViolation(DataIntegrityViolationException ex) {
         for (Throwable cause = ex.getCause(); cause != null; cause = cause.getCause()) {
             if (cause instanceof ConstraintViolationException violation) {
@@ -105,10 +93,5 @@ public class AuthServiceImpl implements AuthService {
             }
         }
         return false;
-    }
-
-    /** D12: emails are trimmed and lower-cased before they're stored or compared; validation runs on the raw input. */
-    private static String normalizeEmail(String email) {
-        return email.trim().toLowerCase(Locale.ROOT);
     }
 }

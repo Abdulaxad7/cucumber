@@ -16,7 +16,6 @@ import java.util.UUID;
 public interface InvitationRepository extends JpaRepository<Invitation, UUID> {
     Optional<Invitation> findByToken(String token);
 
-    /** The invitation, locked for update until the transaction ends, so its state can be checked and claimed. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Invitation> findLockedByToken(String token);
 

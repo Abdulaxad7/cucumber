@@ -5,6 +5,8 @@ spring:
     datatype:
       enum:
         fail-on-numbers-for-enums: true
+  mvc:
+    log-resolved-exception: false
   jpa:
     database: h2
     open-in-view: false
@@ -31,9 +33,18 @@ spring:
 server:
   port: 8081
 
+logging:
+  pattern:
+    correlation: "[requestId=%X{requestId:--} userId=%X{userId:--}] "
+  level:
+    org.hibernate.orm.jdbc.error: ERROR
+
 app:
   jwtSecret: ${JWT_SECRET}
   jwtExpirationInMs: 86400000
   orgs:
     free-seat-limit: 5
+  logging:
+    enabled: true
+    slow-call-threshold: 500ms
 

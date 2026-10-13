@@ -37,6 +37,4 @@ public class OrgMembership {
 
     private LocalDateTime createdAt;
 
-    // Getters and Setters
 }
-

@@ -1,6 +1,6 @@
 # API gateway: single entry point (phase 1)
 Status: Accepted (with follow-ups FU-1 to FU-7, 2026-10-12)
-Last updated: 2026-10-12
+Last updated: 2026-10-13 (docs only: auth-service FU-9 and the D2 routing note, from `docs/specs/auth-service-projects.md` X2)
 
 ## Problem and goal
 
@@ -145,6 +145,10 @@ Rules:
 - Placeholder prefixes are provisional. Each service's first spec decides its final prefixes. No client uses the placeholders, so renaming them isn't a breaking change.
 - Nested cross-service paths (for example `/api/projects/{id}/features` when `Project` lives in auth-service) need an explicit decision when scenario-service is specced.
 - `/api/projects/**` isn't routed in phase 1 because no endpoints exist yet.
+- **Routing note (2026-10-13, auth-service-projects D2 option B, approved by the user):**
+  - User-facing project operations live under `/api/orgs/{orgId}/projects/**`, which the existing `orgs` route already covers. No gateway change.
+  - `/api/projects/**` stays unrouted and is **reserved for project-scoped content services** (for example `/api/projects/{projectId}/features/**` for scenario-service, `/api/projects/{projectId}/runs/**` for report-service). Each of those specs adds its own non-overlapping route.
+  - `/internal/**` is **never routed**. It holds service-to-service operations such as auth-service's project access check `GET /internal/projects/{projectId}/access`, which services call directly at auth-service's base URL.
 
 | Route | External path prefix | Target service | Base URL setting | Public operations (no token) | Status |
 |---|---|---|---|---|---|
@@ -1417,16 +1421,18 @@ Only backend-swe is active in this phase, and no frontend exists. These contract
 
 These are not gateway bugs. qa: don't file them against the gateway.
 
+**Status update (2026-10-13, auth-service FU-9):** items 2–6 are fixed by auth-service phase 1 (`docs/specs/auth-service.md`, accepted 2026-10-12). They are kept below as history.
+
 1. **auth-service couldn't issue tokens with the old secret. Verified by backend-swe, and fixed by T3.**
    - Cause: `JwtTokenProvider.generateToken` calls jjwt 0.11.5 `signWith(SignatureAlgorithm.HS512, String)`, which Base64-decodes the string. The old value `some-secret-key-that-is-long-enough` contains `-`, which isn't standard Base64.
    - Measured before T3: `POST /api/auth/login` failed with `io.jsonwebtoken.io.DecodingException: Illegal base64 character: '-'`. The client saw **403 with an empty body**, not 500, because of item 3.
    - Measured after T3, with the `dev` profile on 8081: register returns 201 and login returns 200 with an `accessToken`.
-2. **`OrganizationController`** uses `@RequiredArgsConstructor` with non-final fields, so its dependencies are null and `POST /api/orgs` fails in auth-service (500 or 403). This affects the response in AC-2.8 only.
-3. **Verified by backend-swe during T3:** `auth-service/.../configuration/SecurityConfig.java` permits `/api/auth/**` but not `/error`. When auth-service fails on a public endpoint for an anonymous caller, the error is forwarded to `/error`, which anonymous callers can't reach. The client therefore gets **403 with an empty body** instead of the real status (500, 409, 400 …). This was observed on the pre-T3 login failure. The gateway passes this 403 through unchanged (AC-1.4).
+2. **Fixed by auth-service phase 1.** **`OrganizationController`** used to use `@RequiredArgsConstructor` with non-final fields, so its dependencies are null and `POST /api/orgs` fails in auth-service (500 or 403). This affects the response in AC-2.8 only.
+3. **Fixed by auth-service phase 1.** **Verified by backend-swe during T3:** `auth-service/.../configuration/SecurityConfig.java` permits `/api/auth/**` but not `/error`. When auth-service fails on a public endpoint for an anonymous caller, the error is forwarded to `/error`, which anonymous callers can't reach. The client therefore gets **403 with an empty body** instead of the real status (500, 409, 400 …). This was observed on the pre-T3 login failure. The gateway passes this 403 through unchanged (AC-1.4).
    - **qa:** a 403 with an empty body from `/api/auth/**` comes from this auth-service defect, not from the gateway. Gateway-generated errors always have an `application/problem+json` body with `requestId` (D6).
-4. **auth-service `./gradlew build` fails at baseline** because its test is in `org.authservice` while the app is in `com.example.authservice`.
-5. **auth-service `OpenEndpoints`** permits `/actuator/**` and `/h2-console/**`. The gateway doesn't expose them (AC-1.5), but they stay reachable directly on 8081 until network isolation exists.
-6. **(2026-10-12, from BUG-11.)** auth-service's `JwtAuthenticationFilter` accepts only `Bearer ` with that exact letter case (`bearerToken.startsWith("Bearer ")`). The gateway matches the scheme case-insensitively (D4). A client that sends `bearer …` is therefore authenticated at the edge but anonymous at auth-service, which fails closed. This isn't a gateway bug. A fix belongs in an auth-service spec.
+4. **Fixed by auth-service phase 1.** **auth-service `./gradlew build` fails at baseline** because its test is in `org.authservice` while the app is in `com.example.authservice`.
+5. **Fixed by auth-service phase 1.** **auth-service `OpenEndpoints`** permits `/actuator/**` and `/h2-console/**`. The gateway doesn't expose them (AC-1.5), but they stay reachable directly on 8081 until network isolation exists.
+6. **Fixed by auth-service phase 1.** **(2026-10-12, from BUG-11.)** auth-service's `JwtAuthenticationFilter` accepts only `Bearer ` with that exact letter case (`bearerToken.startsWith("Bearer ")`). The gateway matches the scheme case-insensitively (D4). A client that sends `bearer …` is therefore authenticated at the edge but anonymous at auth-service, which fails closed. This isn't a gateway bug. A fix belongs in an auth-service spec.
 
 ## Non-functional requirements
 

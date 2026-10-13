@@ -455,7 +455,7 @@ class InvitationsTest {
         return invitationRepository.save(Invitation.builder()
                 .email(email)
                 .organization(organization)
-                .role(role.name())
+                .role(role)
                 .invitedBy(invitedBy)
                 .token(token)
                 .status(status)

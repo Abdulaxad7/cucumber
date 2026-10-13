@@ -13,12 +13,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Answers "is the caller at least role R in organization O?" for {@code @PreAuthorize} (D3). The caller comes
- * from the {@link UserPrincipal} and the role from the database on every call, so a role change or removal applies
- * to the next request. The JWT {@code orgs} claim and {@code X-User-Id} are never used. A non-member and a
- * non-existent organization get the same answer. Business rules (ceiling, seats, last owner) are not checked here.
- */
 @Component("orgGuard")
 @RequiredArgsConstructor
 public class OrgGuard {
@@ -27,9 +21,6 @@ public class OrgGuard {
 
     private final OrgMembershipRepository orgMembershipRepository;
 
-    /**
-     * @param role the minimum role name, for example {@code "ADMIN"}; an unknown name denies access
-     */
     public boolean hasRole(UUID orgId, Authentication authentication, String role) {
         Optional<OrganizationRole> required = parseRole(role);
         if (required.isEmpty()) {
@@ -40,7 +31,6 @@ public class OrgGuard {
                 .orElse(false);
     }
 
-    /** Whether the caller is a member of the organization, whatever their role. */
     public boolean isMember(UUID orgId, Authentication authentication) {
         return callerRole(orgId, authentication).isPresent();
     }

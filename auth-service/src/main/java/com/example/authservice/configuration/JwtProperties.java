@@ -5,12 +5,6 @@ import jakarta.validation.constraints.Positive;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
-/**
- * Token settings (D2 of the gateway spec, contract C2), bound from the existing keys {@code app.jwtSecret}
- * (environment variable {@code JWT_SECRET}, no default outside the dev profile) and {@code app.jwtExpirationInMs}.
- * The secret's Base64 form and its 64-byte minimum are checked when the token provider starts, with messages that
- * never contain the value.
- */
 @Validated
 @ConfigurationProperties(prefix = "app")
 public record JwtProperties(

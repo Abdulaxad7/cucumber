@@ -40,10 +40,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /**
-     * Authenticates the request when the token is valid and its user exists and isn't suspended. Otherwise the caller
-     * stays anonymous: protected paths then answer 401, public operations ignore the token. Tokens are never logged.
-     */
     private void authenticate(String jwt, HttpServletRequest request) {
         UUID userId;
         try {
@@ -73,7 +69,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private String getJwtFromRequest(HttpServletRequest request) {
         String bearerToken = request.getHeader("Authorization");
-        // RFC 9110: the authentication scheme is case-insensitive.
         if (StringUtils.hasText(bearerToken) && bearerToken.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return bearerToken.substring(7);
         }

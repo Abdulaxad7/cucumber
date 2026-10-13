@@ -2,10 +2,6 @@ package com.example.authservice.exception;
 
 import org.springframework.http.HttpStatus;
 
-/**
- * The stable {@code code} member of every Problem auth-service returns (D2). The names are part of the API
- * contract: never rename or remove one.
- */
 public enum ErrorCode {
     VALIDATION_FAILED(HttpStatus.BAD_REQUEST),
     MALFORMED_REQUEST(HttpStatus.BAD_REQUEST),
@@ -31,7 +27,11 @@ public enum ErrorCode {
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE),
     ROLE_CEILING(HttpStatus.UNPROCESSABLE_ENTITY),
     SELF_ROLE_CHANGE(HttpStatus.UNPROCESSABLE_ENTITY),
-    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR);
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR),
+    PROJECT_NAME_TAKEN(HttpStatus.CONFLICT),
+    PROJECT_ARCHIVED(HttpStatus.CONFLICT),
+    NOT_ORG_MEMBER(HttpStatus.UNPROCESSABLE_ENTITY),
+    PROJECT_ROLE_NOT_ALLOWED(HttpStatus.UNPROCESSABLE_ENTITY);
 
     private final HttpStatus status;
 

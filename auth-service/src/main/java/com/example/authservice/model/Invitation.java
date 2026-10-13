@@ -1,6 +1,7 @@
 package com.example.authservice.model;
 
 import com.example.authservice.enums.InvitationStatus;
+import com.example.authservice.enums.OrganizationRole;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -27,14 +28,11 @@ public class Invitation {
     private String email;
 
     @ManyToOne
-    @JoinColumn(name = "org_id")
+    @JoinColumn(name = "org_id", nullable = false)
     private Organization organization;
 
-    @ManyToOne
-    @JoinColumn(name = "project_id")
-    private Project project;
-
-    private String role; // Can be either OrgRole or ProjectRole
+    @Enumerated(EnumType.STRING)
+    private OrganizationRole role;
 
     @ManyToOne
     @JoinColumn(name = "invited_by", nullable = false)
@@ -50,6 +48,4 @@ public class Invitation {
 
     private LocalDateTime createdAt;
 
-    // Getters and Setters
 }
-

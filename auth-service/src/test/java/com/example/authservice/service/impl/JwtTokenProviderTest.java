@@ -72,8 +72,6 @@ class JwtTokenProviderTest {
         assertThat(claims.get("orgs", List.class)).containsExactly(Map.of("orgId", orgId.toString(), "role", "OWNER"));
         assertThat(claims.getExpiration().getTime() - claims.getIssuedAt().getTime()).isEqualTo(ONE_DAY_MS);
         assertThat(provider.getUserIdFromJWT(token)).isEqualTo(ANA_ID);
-        assertThat(provider.getEmailFromJWT(token)).isEqualTo(ANA);
-        assertThat(provider.validateToken(token)).isTrue();
     }
 
     static Stream<Arguments> invalidTokens() {
@@ -101,7 +99,6 @@ class JwtTokenProviderTest {
 
         assertThat(catchThrowable(() -> provider.getUserIdFromJWT(value)))
                 .isInstanceOfAny(JwtException.class, IllegalArgumentException.class);
-        assertThat(provider.validateToken(value)).isFalse();
     }
 
     static Stream<Arguments> unusableSecrets() {

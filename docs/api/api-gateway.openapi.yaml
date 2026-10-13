@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: API gateway edge contract
-  version: 0.2.1
+  version: 0.2.2
   summary: Conventions every client and downstream service relies on when calling the platform through the API gateway.
   description: |
     The API gateway (`api-gateway`) is the single entry point for every API call (spec: `docs/specs/api-gateway.md`).
@@ -29,6 +29,7 @@ info:
       Authentication is checked before route matching, so anonymous callers cannot discover which routes exist.
     - auth-service's `/h2-console`, `/swagger-ui/**`, `/v3/api-docs` and `/actuator/**` are not reachable through the
       gateway. `/api/projects/**` is not routed in phase 1.
+      `/internal/**` is never routed (auth-service's access check is service-to-service).
     - The gateway exposes no management endpoint other than `GET /actuator/health`. `/actuator/env`,
       `/actuator/beans`, `/actuator/configprops`, `/actuator/gateway/**` and the rest follow the deny-by-default rule:
       404 with a valid token, 401 without one.
