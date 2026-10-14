@@ -154,7 +154,7 @@ Rules:
 |---|---|---|---|---|---|
 | auth | `/api/auth/**` | auth-service | `AUTH_SERVICE_URL` | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/invitations/{token}/accept` | Active |
 | orgs | `/api/orgs` and `/api/orgs/**` | auth-service | `AUTH_SERVICE_URL` | none | Active |
-| scenarios | `/api/scenarios/**` | scenario-service | `SCENARIO_SERVICE_URL` | none | Provisional placeholder |
+| scenarios | `/api/projects/*/features`, `/api/projects/*/features/**`, `/api/projects/*/tags`; and `/api/scenarios/**` (placeholder kept for existing gateway tests) | scenario-service | `SCENARIO_SERVICE_URL` | none | Active once scenario-service T13 lands (GE1, approved 2026-10-14, `docs/specs/scenario-service.md` D2). Other `/api/projects/**` paths stay unrouted. |
 | reports | `/api/reports/**` | report-service | `REPORT_SERVICE_URL` | none | Provisional placeholder |
 | (gateway-owned) | `GET /actuator/health` | the gateway itself | — | yes | Active |
 

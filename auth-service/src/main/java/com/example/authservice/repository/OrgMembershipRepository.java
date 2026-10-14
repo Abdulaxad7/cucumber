@@ -18,11 +18,11 @@ public interface OrgMembershipRepository extends JpaRepository<OrgMembership, UU
 
     List<OrgMembership> findByUserIdOrderByOrganizationNameAscOrganizationIdAsc(UUID userId);
 
-    long countByOrganizationId(UUID organizationId);
+    Long countByOrganizationId(UUID organizationId);
 
-    boolean existsByOrganizationIdAndUserEmail(UUID organizationId, String email);
+    Boolean existsByOrganizationIdAndUserEmail(UUID organizationId, String email);
 
     List<OrgMembership> findByOrganizationIdOrderByUserEmailAsc(UUID organizationId);
 
-    long countByOrganizationIdAndRole(UUID organizationId, OrganizationRole role);
+    Long countByOrganizationIdAndRole(UUID organizationId, OrganizationRole role);
 }

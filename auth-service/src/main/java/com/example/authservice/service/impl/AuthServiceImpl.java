@@ -1,8 +1,8 @@
 package com.example.authservice.service.impl;
 
 import com.example.authservice.dto.request.LoginRequest;
-import com.example.authservice.dto.response.LoginResponse;
 import com.example.authservice.dto.request.RegisterRequest;
+import com.example.authservice.dto.response.LoginResponse;
 import com.example.authservice.dto.response.UserResponse;
 import com.example.authservice.enums.UserStatus;
 import com.example.authservice.exception.EmailAlreadyExistsException;
@@ -44,13 +44,12 @@ public class AuthServiceImpl implements AuthService {
             throw new EmailAlreadyExistsException("Email already exists: " + email);
         });
 
-        User user = new User();
-        user.setEmail(email);
-        user.setPasswordHash(passwordEncoder.encode(registerRequest.password()));
-        user.setFullName(registerRequest.fullName());
-        user.setStatus(UserStatus.PENDING_VERIFICATION);
-        user.setCreatedAt(LocalDateTime.now());
-        user.setUpdatedAt(LocalDateTime.now());
+        User user = User.builder().email(email)
+                .passwordHash(passwordEncoder.encode(registerRequest.password()))
+                .fullName(registerRequest.fullName())
+                .status(UserStatus.PENDING_VERIFICATION)
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now()).build();
 
         User savedUser;
         try {

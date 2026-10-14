@@ -1,6 +1,6 @@
 # auth-service phase 2: projects, project roles and the project access check
-Status: Ready (the user answered every blocking question on 2026-10-13; see Blocking questions). Review point A1 passed on 2026-10-13. Review point A3 passed on 2026-10-13 (897 tests, 0 failed). Batch B accepted on 2026-10-13 (T8, T9, T18 done; 901 tests green); T10 resumes under the extended F1 exception, then Batch C.
-Last updated: 2026-10-13 (after Batch B)
+Status: Accepted (with follow-ups FU-10 to FU-16; final acceptance 2026-10-14, see Acceptance)
+Last updated: 2026-10-14 (final acceptance)
 
 ## Problem and goal
 
@@ -1753,4 +1753,69 @@ None open. **Resolved by the user on 2026-10-13**, every answer as recommended e
 
 ## Acceptance
 
-Not started. pm fills this in after qa's report, `docs/qa/auth-service-projects-report.md`.
+**Decision (2026-10-14): Accepted with follow-ups.**
+
+**Basis:** qa's report `docs/qa/auth-service-projects-report.md` (verdict "Signed off with known issues"), tested on `6fd4434` plus the user's uncommitted edits to 4 files. Those edits are green but not part of phase 2.
+- Every AC has a result: **64 of 64 pass** (P0 16/16, P1 38/38, P2 10/10). None is blocked or untested.
+- **No S1, S2 or S3 bugs.** There are two S4 bugs, BUG-1 and BUG-2. Both are phase-1 behaviour and neither breaks an AC row.
+- auth-service `clean build`: 1655 tests (679 backend-swe, 976 qa), 0 failed. The concurrency classes were rerun 3 times, all green. api-gateway build: 411 tests, 0 failed, 4 accepted skips.
+- Mutation check: backend-swe's tests kill 26 of 26 mutants. The manual run through the gateway (port 8090, because the user's Camunda c8run holds 8080) passed every step, including AC-7.6.
+- The ERD matches the DDL. qa confirmed the F1 lines that backend-swe edited in qa's tests.
+- Deviations the user had already accepted: the two project-specific exception classes, the RC-2 race fallbacks, `archivedAt` truncated to microseconds, and the A1 and T17 notes. qa found no observable problem with any of them.
+
+**Rule applied:** every P0 passes, there are no open S1 or S2 bugs, and every AC has a result. The only open bugs are S4, so the decision is "accept with follow-ups". **No fix round.**
+
+### Decisions on qa's questions (pm, 2026-10-14)
+
+| # | Question | Decision (default) | Reason | Follow-up |
+|---|---|---|---|---|
+| Q1 | Should FU-3 cover project names (Unicode blanks, control characters, lone surrogates)? | **Yes.** FU-3's scope becomes every user-supplied name: organization names, `fullName` and project names. A name is invalid (400 `VALIDATION_FAILED`) if it is blank after removing Unicode whitespace (including NBSP, zero-width space, BOM and NEL), or if it contains a control character (U+0000–U+001F, U+007F) or a lone surrogate anywhere. | It's the same class of input with the same PostgreSQL risk: U+0000 is rejected, and a lone surrogate can't be encoded as UTF-8. One rule for every name is easier to test and explain. O1 shows that project names have the gap today. | FU-3 (extended) |
+| Q2 | Is the 100-character limit counted in code points or UTF-16 units? | **Unicode code points**, for every name limit. Until FU-12 lands, the code keeps counting UTF-16 units. | "Characters" means what users see as characters. JSON Schema `maxLength` (the contract) and PostgreSQL `varchar(n)` both count code points. Today's code is stricter only for characters outside the BMP, such as emoji, so nothing over 100 code points can get in. Changing it now would open a fix round for an S4-class edge. | FU-12 |
+| Q3 | Rename, archive, restore and add-member don't re-check the role after taking the lock: accept, or schedule a fix? | **Accept.** Recorded as a P2 candidate that is not scheduled. | The ACs promise that changes take effect on the next request (AC-5.5, AC-7.5), and they do. The window is milliseconds inside a single concurrent request, and qa's invariants held in every race. Re-checking under the lock matters once actions are audited with the actor's role, so the audit spec should revisit it. | FU-13 |
+| Q4 | Are `show-sql` and start-up output without the MDC inside AC-9.6's scope? | **No.** AC-9.6 covers log lines written through the logging system under the default configuration. Dev-profile `show-sql` writes to stdout and bypasses logging. The `DispatcherServlet` lazy-initialisation lines are one-time framework output. | E55 was told not to change `application-dev.yaml`, and qa found 0 personal data in those lines. | FU-14 (P2: when phase 4 rewrites the dev config, replace `show-sql` with the SQL logger so the lines get correlation IDs) |
+| Q5 | Schedule BUG-1 and BUG-2? | **Yes, as P2 follow-ups. Not now.** BUG-1 (lenient UUIDs) must land before the first C5 consumer goes to production. BUG-2 (scalar coercion into strings) lands with FU-3's input-validation round. | Both are S4 and both predate phase 2. Nothing is exposed: authorization uses the parsed UUID. BUG-1 matters once another service keys data on the id string. BUG-2 is a global Jackson setting that affects every string field, so it needs the same regression sweep as FU-3. | FU-10, FU-11 |
+
+Also: **O2 (NFC vs NFD names)**: deferral confirmed. FU-2 (phase 3) now also decides whether names are NFC-normalised before comparison. **O4, O7, O8, O9**: no action (they are D5 behaviour, the gateway's FU-3, D17 behaviour and the D6 order). The test weaknesses qa listed leave no AC unproven, because qa's tests cover each one. They're recorded as FU-15.
+
+### Follow-ups: complete auth-service backlog (phase 1 and phase 2)
+
+None of these blocks acceptance. The user's approval is still required where the table says so.
+
+| ID | Priority / gate | Item | Status | Owner |
+|---|---|---|---|---|
+| FU-1 | P2 | Problems for errors outside Spring MVC (firewall rejections, `TRACE`, direct `/error`), together with the gateway's FU-3 | Open | pm, backend-swe, qa |
+| FU-2 | P2, phase 3 | NFC normalisation of emails. **Extended:** decide NFC for name comparison (O2) | Open | pm (phase 3 spec) |
+| FU-3 | **P1, gate: with the PostgreSQL move (phase 4)** | Blank and control characters in names. **Extended (Q1):** project names, lone surrogates and control characters anywhere in the name | Open | pm (phase 4 spec), backend-swe, qa |
+| FU-4 | P2, phase 4 | Injectable `Clock` | Open, not approved | pm, backend-swe |
+| FU-5 | P2 | Remaining tidy-ups: the 3 stale test texts, and moving tests off the deprecated jjwt API. The `OrganizationProperties` move and the `normalizeEmail` de-duplication were done by E50 and E49 | Open (rest), not approved | backend-swe |
+| FU-6 | — | No email in logs (E29) | **Closed** at A3 by AC-9.10 | — |
+| FU-7 | — | Contract wording for padded role strings | **Done** in T8 (contract 1.2.0) | — |
+| FU-8 | **P1, gate: phase 4** | Re-verify the H2-specific behaviour on PostgreSQL. **Extended:** the project-name uniqueness check (application-level; add the phase-4 unique index), the organization lock used by project writes, the `project_memberships.role` and `invitations.role` enum DDL, and `archived_at timestamp(6)` | Open | pm (phase 4 spec), qa |
+| FU-9 | — | Gateway spec "Known issues" catch-up | **Done** (X2, 2026-10-13) | — |
+| FU-10 | P2, gate: before the first C5 consumer goes to production | BUG-1: accept only canonical 8-4-4-4-12 UUIDs in path variables, and answer 400 `MALFORMED_REQUEST` otherwise | Open | backend-swe, qa |
+| FU-11 | P2, with FU-3 | BUG-2: reject numbers and booleans for string fields (400 `MALFORMED_REQUEST`) | Open | backend-swe, qa |
+| FU-12 | P2, with FU-3 | Count name lengths in code points (Q2). Until then, add a contract note that the server counts UTF-16 code units | Open | pm, backend-swe |
+| FU-13 | P2, revisit in `auth-service-audit` | Re-check the actor's role under the organization lock in rename, archive, restore and add (O5, Q3) | Recorded, not approved | pm |
+| FU-14 | P2, phase 4 | Dev profile: replace `show-sql` with the Hibernate SQL logger so SQL lines get correlation IDs (O6, Q4) | Open | pm, backend-swe |
+| FU-15 | P2 | Test hygiene: `ProjectServiceImplTest` uses strict stubs that break on behaviour-neutral refactors; AC-3.6 and AC-1.2 tests don't assert full state; AC-7.3 doesn't check the 401 body (qa weaknesses 1–6) | Open, not approved (G4) | backend-swe |
+| FU-16 | **P1, gate: the first C5 consumer spec** | Verify the C5 consumer rules (fail closed, no caching) in the consuming service | Open | pm (consumer spec), qa |
+| RC-1 | P2 | Hibernate violation inspection in `AuthServiceImpl` | Candidate, not approved | backend-swe |
+| RC-2 | P2 | Spring Security exceptions thrown from services (logged at DEBUG). The race fallbacks were accepted as they are | Candidate, not approved | backend-swe |
+| RC-3 | P2 | Duplicated `UserResponse` / `OrganizationResponse` mapping | Candidate, not approved | backend-swe |
+| RC-4 | P2 | Security infrastructure in `service/impl` | Candidate, not approved | backend-swe |
+| RC-5 | P2 | No-op Lombok `@NonNull` in `OrganizationResponse` | Candidate, not approved | backend-swe |
+| RC-6 | P2 | Stale lock texts in `handleLockFailure` Javadoc and `LockFailureTest` | Candidate, not approved | backend-swe |
+| RC-7 | P2 | JPA lock exception types no longer reached | Candidate, not approved | backend-swe |
+| RC-8 | P2, before production | `EmailAlreadyExistsException`: not an `ApiException`, and an email in its message (mitigated by E58) | Candidate, not approved | backend-swe |
+| RC-9 | P2, before production | Email in the `UsernameNotFoundException` message | Candidate, not approved | backend-swe |
+| RC-10 | P2 | `JwtAuthenticationFilter` registered twice | Candidate, not approved | backend-swe |
+
+**Notes for the user (not follow-ups, about your uncommitted edits):** qa found that `AcceptInvitationResult`'s new `@Builder` is unused, that `JwtProperties` has an unused `DefaultValue` import, and that the boxed `Long`/`Boolean` return types in `OrgMembershipRepository` work but add no value. All are green.
+
+### Next-phase recommendation
+
+**Do phase 4 (persistence: PostgreSQL + Flyway) next, and write the scenario-service spec in parallel.** Why:
+- Phase 4 closes the only P1 follow-ups (FU-3, FU-8). FU-10 to FU-12 and FU-14 fit into it naturally.
+- It sets the persistence pattern (PostgreSQL, Flyway, `Instant`, `Clock`) that scenario-service will copy, so scenario-service doesn't start on H2 and need its own migration later.
+- scenario-service can then build against the approved ERD and the C5 access check, with FU-10 and FU-16 already handled.
+- Phase 3 (accounts) can wait: nothing in the product is blocked on it.
