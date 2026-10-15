@@ -2,7 +2,7 @@ package com.example.authservice.dto.response;
 
 import com.example.authservice.enums.OrganizationRole;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record MemberResponse(
@@ -10,6 +10,6 @@ public record MemberResponse(
         String email,
         String fullName,
         OrganizationRole role,
-        LocalDateTime joinedAt
+        Instant joinedAt
 ) {
 }

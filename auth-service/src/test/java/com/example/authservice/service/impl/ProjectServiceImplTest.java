@@ -29,10 +29,12 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
-import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -68,6 +70,8 @@ class ProjectServiceImplTest {
     private OrgMembershipRepository orgMembershipRepository;
     @Mock
     private ProjectRoleService projectRoleService;
+    @Spy
+    private Clock clock = Clock.systemUTC();
 
     @InjectMocks
     private ProjectServiceImpl service;
@@ -96,7 +100,7 @@ class ProjectServiceImplTest {
         // Given
         when(organizationRepository.findLockedById(ORG_ID)).thenReturn(Optional.of(acme));
         when(projectRepository.findByOrganizationId(ORG_ID))
-                .thenReturn(List.of(project("Billing", LocalDateTime.now())));
+                .thenReturn(List.of(project("Billing", Instant.now())));
 
         // When / Then
         assertThatThrownBy(() -> service.createProject(ORG_ID, new CreateProjectRequest("billing"), ACTOR_ID))
@@ -151,7 +155,7 @@ class ProjectServiceImplTest {
     @Tag("AC-3.6")
     void renamingAnArchivedProjectIsRejectedBeforeTheNameIsCompared() {
         // Given
-        Project checkout = project("Checkout", LocalDateTime.now());
+        Project checkout = project("Checkout", Instant.now());
         when(organizationRepository.findLockedById(ORG_ID)).thenReturn(Optional.of(acme));
         when(projectRepository.findByIdAndOrganizationId(checkout.getId(), ORG_ID)).thenReturn(Optional.of(checkout));
 
@@ -184,7 +188,7 @@ class ProjectServiceImplTest {
     @Tag("AC-3.8")
     void archivingAnArchivedProjectKeepsItsArchiveTime() {
         // Given
-        LocalDateTime archivedAt = LocalDateTime.of(2026, 10, 13, 9, 30, 0, 123_456_000);
+        Instant archivedAt = Instant.parse("2026-10-13T09:30:00.123456Z");
         Project checkout = project("Checkout", archivedAt);
         when(organizationRepository.findLockedById(ORG_ID)).thenReturn(Optional.of(acme));
         when(projectRepository.findByIdAndOrganizationId(checkout.getId(), ORG_ID)).thenReturn(Optional.of(checkout));
@@ -235,7 +239,7 @@ class ProjectServiceImplTest {
     @Tag("AC-3.6")
     void addingToAnArchivedProjectIsRejectedBeforeTheUserIsLookedUp() {
         // Given
-        Project checkout = project("Checkout", LocalDateTime.now());
+        Project checkout = project("Checkout", Instant.now());
         when(organizationRepository.findLockedById(ORG_ID)).thenReturn(Optional.of(acme));
         when(projectRepository.findByIdAndOrganizationId(checkout.getId(), ORG_ID)).thenReturn(Optional.of(checkout));
 
@@ -333,8 +337,8 @@ class ProjectServiceImplTest {
         return ProjectMembership.builder().id(UUID.randomUUID()).project(project).role(role).build();
     }
 
-    private Project project(String name, LocalDateTime archivedAt) {
+    private Project project(String name, Instant archivedAt) {
         return Project.builder().id(UUID.randomUUID()).organization(acme).name(name)
-                .createdAt(LocalDateTime.now()).archivedAt(archivedAt).build();
+                .createdAt(Instant.now()).archivedAt(archivedAt).build();
     }
 }

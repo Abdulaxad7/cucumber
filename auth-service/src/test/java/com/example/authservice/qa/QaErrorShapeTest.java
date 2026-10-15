@@ -20,7 +20,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
 import static com.example.authservice.qa.QaSupport.as;
@@ -152,14 +153,14 @@ class QaErrorShapeTest {
                     as(delete(members + acme.ana().getId()), acme.ana()));
             case INVITATION_NOT_PENDING -> {
                 var accepted = seedInvitation(invitationRepository, acmeOrg, acme.ben(), "fay@example.com",
-                        OrganizationRole.MEMBER, InvitationStatus.ACCEPTED, LocalDateTime.now().plusDays(7),
+                        OrganizationRole.MEMBER, InvitationStatus.ACCEPTED, Instant.now().plus(7, ChronoUnit.DAYS),
                         "inv-shape-QA");
                 yield new Scenario(invitations + "/" + accepted.getId(),
                         as(delete(invitations + "/" + accepted.getId()), acme.ben()));
             }
-            case INVITATION_EXPIRED -> gone(acmeOrg, InvitationStatus.PENDING, LocalDateTime.now().minusMinutes(1));
-            case INVITATION_REVOKED -> gone(acmeOrg, InvitationStatus.REVOKED, LocalDateTime.now().plusDays(1));
-            case INVITATION_ALREADY_ACCEPTED -> gone(acmeOrg, InvitationStatus.ACCEPTED, LocalDateTime.now().plusDays(1));
+            case INVITATION_EXPIRED -> gone(acmeOrg, InvitationStatus.PENDING, Instant.now().minus(1, ChronoUnit.MINUTES));
+            case INVITATION_REVOKED -> gone(acmeOrg, InvitationStatus.REVOKED, Instant.now().plus(1, ChronoUnit.DAYS));
+            case INVITATION_ALREADY_ACCEPTED -> gone(acmeOrg, InvitationStatus.ACCEPTED, Instant.now().plus(1, ChronoUnit.DAYS));
             case UNSUPPORTED_MEDIA_TYPE -> new Scenario("/api/auth/register",
                     post("/api/auth/register").contentType(MediaType.TEXT_PLAIN).content("x"));
             case ROLE_CEILING -> new Scenario(members + acme.ana().getId(),
@@ -169,7 +170,7 @@ class QaErrorShapeTest {
         };
     }
 
-    private Scenario gone(Organization acmeOrg, InvitationStatus status, LocalDateTime expiresAt) {
+    private Scenario gone(Organization acmeOrg, InvitationStatus status, Instant expiresAt) {
         seedInvitation(invitationRepository, acmeOrg, acme.ben(), "fay@example.com", OrganizationRole.MEMBER, status,
                 expiresAt, "inv-shape-QA");
         return new Scenario(accept("inv-shape-QA"), json(post(accept("inv-shape-QA")),

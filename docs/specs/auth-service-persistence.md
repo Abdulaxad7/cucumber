@@ -1,6 +1,6 @@
 # auth-service phase 4: persistence (PostgreSQL + Flyway)
-Status: Ready (Q1 to Q11 answered by the user on 2026-10-14, all as recommended; ERD applied as X4)
-Last updated: 2026-10-14
+Status: Accepted (with follow-ups FU-17 to FU-24; final acceptance 2026-10-15 after fix round 1, see Acceptance)
+Last updated: 2026-10-15
 
 ## Problem and goal
 
@@ -168,7 +168,7 @@ The working tree has the user's own uncommitted edits in `configuration/JwtPrope
 
 | Item | Result |
 |---|---|
-| Entities | 7 entities: `User`, `Organization`, `OrgMembership`, `Project`, `ProjectMembership`, `Invitation`, `AuditLog`. Every timestamp is `LocalDateTime` (13 fields). Enums are `@Enumerated(STRING)`. Only `users.email`, `users.mfa_enabled` and the join columns are NOT NULL; every other business column is nullable (ERD). `User.email` has `@Column(unique = true, nullable = false)`. |
+| Entities | 7 entities: `User`, `Organization`, `OrgMembership`, `Project`, `ProjectMembership`, `Invitation`, `AuditLog`. Every timestamp is `LocalDateTime` (13 fields; corrected at review point B: **10** timestamp fields and columns). Enums are `@Enumerated(STRING)`. Only `users.email`, `users.mfa_enabled` and the join columns are NOT NULL; every other business column is nullable (ERD). `User.email` has `@Column(unique = true, nullable = false)`. |
 | `AuditLog` | `@Table(name = "audit_log")`; `metadata` is a `String` with `columnDefinition = "json"`. No getters, setters or constructors besides the implicit one, so nothing can write or read it. `AuditLogRepository` is used only by `support/AcmeFixture.reset()` (lines 9, 42, 49). |
 | `InvitationRepository` | `LocalDateTime now` parameters at lines 26, 29 and 32. |
 | Ordering in SQL | `OrgMembershipRepository:19` orders organizations by `organization.name`, then id. `:25` and `ProjectMembershipRepository:18` order members by email. Project lists are sorted in Java (`ProjectServiceImpl:47-49`). **On PostgreSQL, SQL ordering depends on the database collation**; H2 compares Java strings (D3). |
@@ -244,7 +244,7 @@ Each decision has a recommended default and a reason. The items that change exis
 
 **Why:**
 - The builtin `C.UTF-8` provider exists only from 17.
-- `C.UTF-8` sorts by code point on every operating system. That's what H2 does today (Java string order), so no existing list order changes: organizations by name give `"Acme QA"`, `"Zeta QA"`, `"beta QA"` (AC-3.6). It also makes `lower()` use Unicode case mapping, not the OS's locale tables.
+- `C.UTF-8` sorts by code point on every operating system. That's what H2 does today (Java string order), so no existing list order changes: organizations by name give `"Acme QA"`, `"Zeta QA"`, `"beta QA"` (AC-3.6). It also makes `lower()` use Unicode case mapping, not the OS's locale tables. **Corrected 2026-10-15 (T8):** the builtin `lower()` doesn't match Java's `toLowerCase(Locale.ROOT)` for U+0130 (`lower('İzmir')` is `'izmir'`; Java gives `'i̇zmir'`). ICU's `"und-x-icu"` collation does match Java, so the project-name index uses it (D8 item 6).
 - The Debian-based Docker image defaults to `en_US.utf8`, and Homebrew's `initdb` uses the macOS locale. Either way, results and orders would differ between environments.
 
 backend-swe verifies the PostgreSQL 17 syntax (`initdb --locale-provider=builtin --builtin-locale=C.UTF-8`, and `CREATE DATABASE ... LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF-8' TEMPLATE template0`) and reports `SELECT datlocprovider, datlocale FROM pg_database` for both the test container and the dev database (P20).
@@ -377,7 +377,7 @@ backend-swe verifies the PostgreSQL 17 syntax (`initdb --locale-provider=builtin
    - **Why:** the application stores normalised emails (phase-1 D12), and the check makes the database guarantee it. Exact uniqueness of lower-case values is then case-insensitive uniqueness, and lookups (`findByEmail`, `email = ?`) keep using the existing unique index.
    - **Alternative:** a unique index on `lower(email)`. That's a second index on the same column, and `email = ?` lookups can't use it.
    - **Known edge:** if PostgreSQL's `lower()` (Unicode simple case mapping) ever disagreed with Java's `toLowerCase(Locale.ROOT)` for an exotic character, that registration would get 409 `CONFLICT` instead of 201. The application rule is unchanged (A10).
-6. **Project names (E72): unique index `uk_projects_org_id_name_lower` on `(org_id, lower(name))`**, archived projects included (phase-2 D5).
+6. **Project names (E72): unique index `uk_projects_org_id_name_lower` on `(org_id, lower(name COLLATE "und-x-icu"))`**, archived projects included (phase-2 D5). Decided 2026-10-15: ICU's `lower()` matches Java for U+0130, and the builtin one doesn't (D3). The main session verified it in `postgres:17` (`lower('İzmir' COLLATE "und-x-icu")` = `'i̇zmir'`, 6 characters; 871 ICU collations in the image).
    - The application check under the organization lock stays the primary rule and keeps answering `PROJECT_NAME_TAKEN`.
    - The index is the safety net, and its leading `org_id` also indexes the foreign key.
 7. **"One pending invitation per organization and email" stays in the application only.**
@@ -422,6 +422,8 @@ backend-swe verifies the PostgreSQL 17 syntax (`initdb --locale-provider=builtin
   - AC-3.3 proves it.
 - **Read-only transactions are enforced on PostgreSQL** (H2 ignores them). The full suite on PostgreSQL detects a write inside `@Transactional(readOnly = true)`; any failure of this kind is reported, not worked around.
 - **A failed statement aborts the transaction on PostgreSQL.** No service may catch a database exception and keep using the same transaction (PL). Today's code only re-throws (`AuthServiceImpl:57-61`).
+
+**Tests only (E82, 2026-10-15):** the shared test database uses 1 s to shorten the build. Production and dev stay at 5 s, and a test checks the `application.yaml` value.
 
 **Why 5 s:** the longest lock hold in the concurrency suites is a few hundred milliseconds of BCrypt inside the accept flow (RC-11). Ten queued requests fit within 5 s, and a stuck lock still answers quickly.
 **Stop condition (T3):** if any concurrency test gets a 409 `CONFLICT` from a lock timeout, stop. Report the observed waits and ask whether to raise the value.
@@ -561,6 +563,19 @@ In the table, `<svc>` is the service name in snake case (`auth_service`, `scenar
 | 17 | Tests: schema | One schema test pinned to the ERD (columns, check values, unique constraints and indexes, foreign keys and their delete rules, `timestamptz`), plus direct-SQL tests for every constraint (P17). |
 | 18 | Text input | D11 (no control characters or lone surrogates in stored text, Unicode-blank names rejected, code-point lengths) and D12 (numbers and booleans aren't strings). |
 | 19 | Later (not now) | Separate migration and runtime roles; backups; pooling outside the app; statement timeouts. |
+
+**As proven by the reference implementation (accepted 2026-10-15).** These refinements apply to every service that adopts the pattern. They take precedence over the rows above where the two differ:
+- **Item 4:**
+  - the settings check runs after binding and before the `DataSource` is created (E81, E83: a plain properties record, a separate settings check, and an `AbstractDependsOnBeanFactoryPostProcessor`);
+  - the check rejects a blank value, or a value that is entirely one unresolved `${NAME}`;
+  - no value is ever printed;
+  - **database passwords must not contain `${`** (FU-24).
+- **Item 10:** when the database lower-cases for a uniqueness rule, it must agree with Java's `toLowerCase(Locale.ROOT)`. Use `lower(x COLLATE "und-x-icu")`, because the builtin `C.UTF-8` `lower()` differs for U+0130. Unicode 14+ characters still differ (FU-17).
+- **Item 12:** tests may use a shorter `lock_timeout` (auth-service uses 1 s, E82), as long as a test proves that the production value in `application.yaml` is 5 s.
+- **Items 14 and 16:**
+  - the container from `@ServiceConnection` stops when the importing context closes, so no `@DirtiesContext` and keep cached contexts well under 32 (P21a);
+  - the test support's `@DynamicPropertySource` also sets `<SVC>_DB_URL`, `<SVC>_DB_USERNAME` and `<SVC>_DB_PASSWORD` from the container, so the settings check runs in tests;
+  - the starting values in item 16 (`max_connections=300`, pool 12, minimum idle 1) were confirmed.
 
 ## User stories
 
@@ -780,6 +795,7 @@ Feature: Existing behaviour on PostgreSQL
     When <request>
     Then within 7 seconds of the request the response is a Problem 409 / CONFLICT
     And the log of the request has exactly one WARN line "Request rejected because a lock could not be acquired", no ERROR line and no stack trace line
+    # Accepted at review point A (2026-10-15): the request also logs the aspect's "Slow call" WARN, because it waits for the lock timeout.
     And nothing was stored
 
     Examples:
@@ -831,7 +847,7 @@ Feature: UTC timestamps
 
   Background:
     Given the Projects fixture
-    And Ben has invited "gus@example.com" to Acme as "MEMBER"
+    And Ben has invited "kit@example.com" to Acme as "MEMBER"
 
   @US-4 @AC-4.1 @P1
   Scenario Outline: Every timestamp in a response is a UTC timestamp
@@ -849,7 +865,7 @@ Feature: UTC timestamps
       | Ana creates the project "Mobile App" in Acme                              | "createdAt"                                  |
       | Cai archives Checkout                                                     | "createdAt", "archivedAt"                    |
       | Cai adds Ivy to Checkout as "READER"                                      | "joinedAt"                                   |
-      | Gus accepts Ben's invitation anonymously with "Gus Hale" and "Secret123!" | "user.createdAt", "organization.createdAt"   |
+      | Kit accepts Ben's invitation anonymously with "Kit Hale" and "Secret123!" | "user.createdAt", "organization.createdAt"   |
 
   @US-4 @AC-4.2 @P1
   Scenario Outline: The server's time zone changes nothing
@@ -893,7 +909,7 @@ Feature: Unstorable text is a validation error
 
   Background:
     Given the Projects fixture
-    And Ben has invited "gus@example.com" to Acme as "MEMBER"
+    And Ben has invited "kit@example.com" to Acme as "MEMBER"
 
   @US-5 @AC-5.1 @P0
   Scenario Outline: A control character or a lone surrogate in a stored name or email is rejected
@@ -915,7 +931,7 @@ Feature: Unstorable text is a validation error
       | Ana                | POST {acme-projects}                            | name     | "\uDC00"                 |
       | Cai                | PATCH {acme-projects}/{checkout}                | name     | "Check\u007Fout"         |
       | Ben                | POST /api/orgs/{acme}/invitations               | email    | "fay\uD800@example.com"  |
-      | an anonymous caller | POST /api/auth/invitations/{Gus's token}/accept | fullName | "Gus\u0000Hale"          |
+      | an anonymous caller | POST /api/auth/invitations/{Kit's token}/accept | fullName | "Kit\u0000Hale"          |
 
   @US-5 @AC-5.2 @P1
   Scenario Outline: Characters that trimming removes from a project name don't count
@@ -959,6 +975,8 @@ In AC-5.4, `DECOMPOSED_ECLAIR` stands for the JSON string made of `e`, U+0301 CO
 **Notes for testers.**
 - AC-5.1's login row expects `VALIDATION_FAILED` because login already validates its body before authenticating (phase-1 behaviour for invalid emails).
 - AC-5.3's rows are percent-encodings in the request path. The firewall may reject some of them with its own 400 (phase-1 FU-1). The AC accepts that, but never a 5xx and never a different 4xx.
+- **Invitee "kit" (2026-10-15, review point A).** The Projects fixture already makes Gus an Acme member (`support/ProjectFixture:42-45`), so the US-4, US-5 and US-6 Backgrounds invite `kit@example.com` instead of `gus@example.com`. The user decided this for US-5; pm applied the same fix to US-4 and US-6, which share the Background. AC-3.2 keeps Gus, because it uses the Acme fixture only.
+- **As built on PostgreSQL (review point A, 2026-10-15):** AC-5.3's `abc%00def` gets the firewall's 400 with an empty body, which the AC allows; the other two tokens get 404 `INVITATION_NOT_FOUND`. E60 wasn't needed.
 
 ### US-6: Names count what users see, and JSON types are strict (P1)
 As a frontend developer, I want names validated by what users see, and wrongly typed JSON rejected, so that invisible names and coerced values can't be created (FU-3, FU-11, FU-12).
@@ -968,7 +986,7 @@ Feature: Visible names and strict JSON types
 
   Background:
     Given the Projects fixture
-    And Ben has invited "gus@example.com" to Acme as "MEMBER"
+    And Ben has invited "kit@example.com" to Acme as "MEMBER"
 
   @US-6 @AC-6.1 @P1
   Scenario Outline: A name made only of invisible characters is blank
@@ -982,7 +1000,7 @@ Feature: Visible names and strict JSON types
       | Ana                 | POST {acme-projects}                            | name     | U+200B               |
       | Cai                 | PATCH {acme-projects}/{checkout}                | name     | U+FEFF               |
       | an anonymous caller | POST /api/auth/register                         | fullName | U+2060, U+00A0       |
-      | an anonymous caller | POST /api/auth/invitations/{Gus's token}/accept | fullName | U+202F, U+0020, U+200D |
+      | an anonymous caller | POST /api/auth/invitations/{Kit's token}/accept | fullName | U+202F, U+0020, U+200D |
 
   @US-6 @AC-6.2 @P1
   Scenario Outline: Name limits count code points
@@ -1013,7 +1031,7 @@ Feature: Visible names and strict JSON types
       | Ana                 | POST {acme-projects}                            | name     | 123      |
       | Cai                 | PATCH {acme-projects}/{checkout}                | name     | false    |
       | Ben                 | POST /api/orgs/{acme}/invitations               | email    | 7        |
-      | an anonymous caller | POST /api/auth/invitations/{Gus's token}/accept | password | 12345678 |
+      | an anonymous caller | POST /api/auth/invitations/{Kit's token}/accept | password | 12345678 |
 
   @US-6 @AC-6.4 @P2
   Scenario: A null for a string field is still a validation error
@@ -1104,7 +1122,7 @@ pm applies this to `docs/erd/cucumber.dbml` and `docs/erd/README.md` as task X4,
 | org_memberships | role | enum, null | varchar(32), not null, check `ck_org_memberships_role_values` (`OWNER`, `ADMIN`, `MEMBER`, `READER`) | E70, E71 |
 | org_memberships | created_at | timestamp(6), null | timestamptz, not null | E69, E70 |
 | org_memberships | indexes | unique (user_id, org_id) | `uk_org_memberships_user_id_org_id` (user_id, org_id); new `ix_org_memberships_org_id` | E73 |
-| projects | name | varchar(255), null | varchar(100), not null; unique index `uk_projects_org_id_name_lower` on (org_id, lower(name)), archived included | E70, E72 |
+| projects | name | varchar(255), null | varchar(100), not null; unique index `uk_projects_org_id_name_lower` on (org_id, lower(name COLLATE "und-x-icu")), archived included | E70, E72 |
 | projects | created_at | timestamp(6), null | timestamptz, not null | E69, E70 |
 | projects | archived_at | timestamp(6), null | timestamptz, null | E69 |
 | project_memberships | role | enum, null | varchar(32), not null, check `ck_project_memberships_role_values` (`ADMIN`, `MEMBER`, `TESTER`, `READER`) | E70, E71 |
@@ -1134,6 +1152,9 @@ pm applies this to `docs/erd/cucumber.dbml` and `docs/erd/README.md` as task X4,
 - test groups A–C and the F1-a to F1-e policy;
 - the "will not be touched" list.
 
+**User decision, 2026-10-15 (review point A):** E81 is approved (Batch B, T5b). E60 and E61b weren't needed and lapse.
+**User decision, 2026-10-15 (review point D):** E82 is approved (Batch E, T14a).
+
 **Build order:** phase 4 first, then scenario-service code. scenario-service's T1 (contract, docs only) may run in parallel.
 
 Every file in the working tree is the user's code: HEAD `6fd4434` plus the 4 uncommitted edits. That includes all phase-1 and phase-2 work and its tests. Only the items below may change it. Numbering continues from phase 2 (E1-E58, X1-X3, EG1). Each item can be approved on its own. "Conditional" items apply only if their condition holds, and the task reports which way it went.
@@ -1157,7 +1178,8 @@ Every file in the working tree is the user's code: HEAD `6fd4434` plus the 4 unc
 | ID | Change | Files | Why | Risk | Depends on | Task |
 |---|---|---|---|---|---|---|
 | E68 | **Service clock (D7, FU-4).** A new configuration class with the `Clock` bean. `AuthServiceImpl`, `InvitationServiceImpl`, `OrganizationServiceImpl` and `ProjectServiceImpl` get a constructor-injected `Clock` and use `Instant.now(clock)` at the `now()` lines listed in Code facts. The truncation at `ProjectServiceImpl:107` is removed. | the 4 service implementations (the `now()` lines, one field and import each); a new class in `configuration/`; `ProjectServiceImplTest` and `InvitationServiceImplTest` (one clock field each, group B) | D7 | Low-medium | E69 (same lines; do both in one task) | T5 |
-| E69 | **`Instant` and `timestamptz` (D6).** Migration V2 converts the 13 timestamp columns to `timestamptz` (values assumed UTC). Every entity timestamp becomes `Instant`, and so do the 7 response DTO timestamp fields and `InvitationRepository`'s 3 parameters. Services use `Instant`. Contract 1.3.0 for the timestamp schema and C4. Test fallout: group B and F1-d. | `model/` (7 entities: the timestamp fields and imports only), `dto/response/UserResponse`, `OrganizationResponse`, `MemberResponse`, `InvitationResponse`, `CreatedInvitationResponse`, `ProjectResponse`, `ProjectMemberResponse` (timestamp types and imports only), `repository/InvitationRepository.java` (3 parameter types and import), the 4 service implementations; new `V2__timestamps_with_time_zone.sql`; `docs/api/auth-service.openapi.yaml` | D6 | **Medium-high:** wide, and the wire format changes | E66 | T5 |
+| E81 | **Named failure for missing database settings (AC-1.5; approved by the user on 2026-10-15).** Problem: an unset `${AUTH_DB_*}` stays literal text, so start-up fails with messages that don't name the variable. Change: a validated `@ConfigurationProperties` record for the datasource URL, username and password, in the style of `configuration/JwtProperties`, registered in `PropertiesConfiguration`. Start-up fails with a message naming `AUTH_DB_URL`, `AUTH_DB_USERNAME` or `AUTH_DB_PASSWORD` when that value is blank or still an unresolved `${…}`. Messages never contain the values. | a new record in `configuration/`; `configuration/PropertiesConfiguration.java` (registration and import only); `application.yaml` only if binding needs it (reported) | D5, AC-1.5 | Low-medium (every start) | E64 | T5b |
+| E69 | **`Instant` and `timestamptz` (D6).** Migration V2 converts the 10 timestamp columns (originally written as 13; corrected 2026-10-15) to `timestamptz` (values assumed UTC). Every entity timestamp becomes `Instant`, and so do the 7 response DTO timestamp fields and `InvitationRepository`'s 3 parameters. Services use `Instant`. Contract 1.3.0 for the timestamp schema and C4. Test fallout: group B and F1-d. | `model/` (7 entities: the timestamp fields and imports only), `dto/response/UserResponse`, `OrganizationResponse`, `MemberResponse`, `InvitationResponse`, `CreatedInvitationResponse`, `ProjectResponse`, `ProjectMemberResponse` (timestamp types and imports only), `repository/InvitationRepository.java` (3 parameter types and import), the 4 service implementations; new `V2__timestamps_with_time_zone.sql`; `docs/api/auth-service.openapi.yaml` | D6 | **Medium-high:** wide, and the wire format changes | E66 | T5 |
 
 ### Batch C: database rules
 
@@ -1181,6 +1203,7 @@ Every file in the working tree is the user's code: HEAD `6fd4434` plus the 4 unc
 
 | ID | Change | Files | Why | Risk | Depends on | Task |
 |---|---|---|---|---|---|---|
+| E82 | **Faster tests: 1 s lock timeout in tests only (approved by the user on 2026-10-15).** Every test context that uses `support/TestDatabase` gets `lock_timeout` 1 s through one added `@DynamicPropertySource` line (`spring.datasource.hikari.data-source-properties.options`). `application.yaml` (5 s for production) and `application-dev.yaml` are unchanged. `exception/RowLockTimeoutTest` lines 45, 95, 96 and 101 assert the test value. A new test proves that `application.yaml` still sets `-c lock_timeout=5s`. | `support/TestDatabase.java` (one registry line, and one Javadoc sentence); `exception/RowLockTimeoutTest.java` 45, 95, 96, 101; a new test | Build time (4m03s at review point D, about 3× H2) | Low-medium: every lock wait in tests | E64, E81 | T14a |
 | E78 | `application-dev.yaml`: replace `spring.jpa.show-sql: true` with `logging.level.org.hibernate.SQL: DEBUG` | `application-dev.yaml` | FU-14, D14 | Low | E65 | T14 |
 | E79 | README: "Running locally with PostgreSQL" and "Database and migrations" (D17). Existing sections stay. | `auth-service/README.md` | D17 | Low (docs) | — | T14 |
 | E80 | Contract 1.3.0 final sync | `docs/api/auth-service.openapi.yaml` | D17 | Low (docs) | — | T14 |
@@ -1235,7 +1258,7 @@ In every case:
 - `controller/` (all four controllers): D12 and D13 work through configuration only.
 - `security/` (guards, `UserPrincipal`, Problem handlers).
 - `aop/Logging.java`.
-- In `configuration/`: `SecurityConfig`, `JwtAuthenticationFilter`, `RequestIdMdcFilter`, `UserIdMdcFilter`, `LoggingProperties`, `OrganizationProperties`, `JwtProperties` (user-edited), `OpenApiConfiguration`, `PropertiesConfiguration`. New configuration classes are allowed (E68, E76, E77).
+- In `configuration/`: `SecurityConfig`, `JwtAuthenticationFilter`, `RequestIdMdcFilter`, `UserIdMdcFilter`, `LoggingProperties`, `OrganizationProperties`, `JwtProperties` (user-edited), `OpenApiConfiguration`, `PropertiesConfiguration` (except E81's registration entry and import). New configuration classes are allowed (E68, E76, E77, E81).
 - `exception/` (all classes, including `ApiExceptionHandler`, `ErrorCode` and `Problems`). No new error code.
 - `enums/`, `util/TokenGenerator`, `util/EmailNormalizer`.
 - `service/` interfaces and `service/AcceptInvitationResult` (user-edited). `CustomUserDetailsService`, `JwtTokenProvider`, `ProjectRoleService`, `ProjectAccessServiceImpl`.
@@ -1342,6 +1365,10 @@ Phase 1's P1-P12 and phase 2's P13-P16 apply: layering, transactions, DTOs, vali
   - scratch databases only for start-up tests, always dropped in `finally`;
   - report distinct contexts and peak connections in T3;
   - never add `@DirtiesContext` to work around connections; ask instead.
+- **P21a. Test-context lifecycle (added at review point A, 2026-10-15).** In Boot 4.1, a container imported through `@ServiceConnection` stops when the importing context closes. So, for every task after T4:
+  - no `@DirtiesContext`, for any reason;
+  - keep the number of cached test contexts well under Spring's limit of 32, so no context that imported the container is evicted and closed mid-run. A new test reuses an existing context configuration (`support/UsesTestDatabase`, `support/UsesEmptyTestDatabase`, `AuthServiceIntegrationTest`) unless it needs different properties;
+  - report the distinct context count in every handoff that adds a test class with its own configuration.
 
 ### Logging rules (phase-2 D17, binding)
 - No passwords, password hashes, JWTs or `Authorization` values, invitation tokens, emails, full names or database passwords in any log line, at any level.
@@ -1449,6 +1476,14 @@ Do the tasks in order, batch by batch. **Stop at each review point** and hand of
 
 **Review point A.** The user reviews the switch: V1, configuration, test wiring, F1 edits and the per-class table. qa may start the test plan.
 
+**Review point A: passed (user, 2026-10-15).** The main session verified a clean build: 1735 tests (759 backend-swe, 976 qa), 0 failed, on PostgreSQL 17 through Testcontainers. H2 is removed. V1 is identical to Hibernate's PostgreSQL DDL (catalog comparison, 84 lines). E60 and E61b weren't needed. AC-1.5 isn't done yet; it moves to T5b (E81). backend-swe's deviations, accepted as they are:
+- **Container lifecycle (risk).** In Boot 4.1, a container imported through `@ServiceConnection` stops when the importing context closes. New guardrail P21a below.
+- **Two support annotations:** `support/UsesTestDatabase`, and `support/UsesEmptyTestDatabase`, whose `@Sql` deletes all rows inside each `@DataJpaTest`'s rolled-back transaction.
+- **AC-3.2 log shape:** each lock-timeout request also logs the aspect's "Slow call" WARN (noted in AC-3.2).
+- **US-5 Background** invites `kit@example.com`, because Gus is already an Acme member in the Projects fixture (see US-5 "Notes for testers").
+- **Stale comments, left under G4:** `exception/LockFailureTest` near line 185 still says "for update", but the actual SQL is "for no key update". `repository/ProjectGuardTest:30` still mentions H2. They aren't fixed in phase 4 unless a later task's Allowed files name them.
+- **AC-5.3:** `%00` gets the firewall's 400 with an empty body (the AC allows it); the other two tokens get 404 (US-5 "Notes for testers").
+
 ### Batch B: UTC time (review point B)
 
 **T5. Service clock, `Instant` and `timestamptz`.** E-items: E68 (if approved), E69.
@@ -1470,14 +1505,41 @@ Do the tasks in order, batch by batch. **Stop at each review point** and hand of
   - new `V2__timestamps_with_time_zone.sql`;
   - a new `configuration/` clock class;
   - group B test lines; F1-c (timestamp lines) and F1-d lines;
+  - `docs/erd/cucumber.dbml`: the type and note of each timestamp column V2 converts, turning their E69 mark into as-built (pm task P1, README "Maintenance"); nothing else in that file;
   - create tests.
 - **Must not:** change any other DTO field or JSON name; change expiry rules (7 days, exclusive at `expiresAt`).
 
+**T5b. Named failure for missing database settings.** E-items: E81 (approved by the user on 2026-10-15).
+- **Test first:** backend-swe's AC-1.5 test (written in T3 and held out of the build so far) joins the build. It ignores the process environment: the three settings are blank or unresolvable placeholders that the test controls. Run it against the unchanged code and report the failure: today the failure doesn't name the variable.
+- **Change:** per E81.
+- **ACs:** AC-1.5 (3 rows), plus one row per setting for a blank value. AC-1.6 and every other start-up test still pass.
+- **Done when:**
+  - the failure for each of the 3 settings names `AUTH_DB_URL`, `AUTH_DB_USERNAME` or `AUTH_DB_PASSWORD`;
+  - no captured log line and no message in the failure's cause chain contains a real value (the AC-1.6 password, for a set value). **Accepted 2026-10-15:** Boot's failure report prints the rejected value, which is only ever a blank or the `${…}` placeholder;
+  - the `dev` profile still starts without any `AUTH_DB_*` variable; tests get them from the container through `support/TestDatabase`;
+  - the build is green.
+- **Stop conditions:**
+  - the datasource or Flyway fails before the new properties are validated, and fixing the order needs a file outside Allowed files;
+  - an existing start-up test (`JwtSecretStartupTest`, `OrganizationPropertiesStartupTest`, the AC-1.x tests) needs a changed expected value.
+- **Allowed files:**
+  - create one record in `configuration/` (pattern: `configuration/JwtProperties`);
+  - modify `configuration/PropertiesConfiguration.java` (the registration entry and its import only);
+  - modify `application.yaml` only if the record can't bind the existing `spring.datasource` keys as they are; report why;
+  - **added 2026-10-15 (E81 extension, after T5b's stop condition: the `DataSource` was created before the record bound, and `@ServiceConnection` left the `${AUTH_DB_*}` placeholders literal):**
+    - (a) create one class in `configuration/` extending Boot 4.1's `AbstractDependsOnBeanFactoryPostProcessor`, so the `DataSource` depends on the validated datasource-properties record;
+    - (b) modify `support/TestDatabase`: three lines in its `@DynamicPropertySource` that set `AUTH_DB_URL`, `AUTH_DB_USERNAME` and `AUTH_DB_PASSWORD` from the container; `@ServiceConnection` stays;
+  - create tests (the AC-1.5 test included).
+- **Must not:** add a default value for any `AUTH_DB_*` setting; log or echo a value; change `JwtProperties` (user-edited) or any other configuration class.
+
 **Review point B.** frontend-swe can rely on contract 1.3.0's timestamps.
+
+**Review point B (T5): passed (user, 2026-10-15).** The main session verified a clean build: 1750 tests, 0 failed. V2 converts the **10** timestamp columns to `timestamptz` (E69's "13" was wrong). Contract 1.3.0 is in place. **Batch C follows T5b with no new review stop.**
 
 ### Batch C: database rules (review point C)
 
 Each task: **test first** with direct SQL (P17), then the migration, then the F1-c expected-value lines for the tables it changes.
+
+**Progress (2026-10-15).** T5b, T6 (V3) and T7 (V4) are done. The main session verified a clean build: 1786 tests, 0 failed. In T7, backend-swe removed the 5 auth-service DBML `Enum` blocks, and in T6 and T7 it edited the per-column as-built lines of `docs/erd/cucumber.dbml`. **Both are accepted.** The expected `dbml2sql` result is now 22 tables, 26 foreign keys and 8 enums. **T8 to T10 may edit the per-column as-built lines of `docs/erd/cucumber.dbml`** for the objects their migration changes, and nothing else in that file.
 
 **T6. Required columns, lengths, positive seat limit.** E-items: E70.
 - **ACs:** AC-2.1, AC-2.5.
@@ -1490,7 +1552,8 @@ Each task: **test first** with direct SQL (P17), then the migration, then the F1
 
 **T8. Lower-case emails and case-insensitive project names.** E-items: E72.
 - **ACs:** AC-2.2, AC-2.3; re-run AC-3.3 and AC-3.4 (5 times each, class green 3 runs in a row).
-- **Allowed files:** new `V5__...sql`; F1-c lines; create tests.
+- **Allowed files:** new `V5__...sql`; F1-c lines; create tests; **G3 exception (user, 2026-10-15):** `controller/InvitationAcceptanceTest:445-447` seeds the invitation email in lower case and logs in with mixed case. That still proves the case-insensitive match.
+- **Index (user, 2026-10-15):** `uk_projects_org_id_name_lower` on `(org_id, lower(name COLLATE "und-x-icu"))` (D8 item 6). The first attempt stopped on the A10 edge: with the builtin `lower()`, qa's `QaProjectNamesTest` row "İzmir / izmir are different" got 409.
 - **Stop condition:** a phase-1 or phase-2 test gets 409 `CONFLICT` where it expected success (the A10 edge). Report the value.
 
 **T9. Foreign-key indexes and delete rules.** E-items: E73.
@@ -1505,6 +1568,12 @@ Each task: **test first** with direct SQL (P17), then the migration, then the F1
 - **Stop condition:** anything besides the named lines references the class or table. Report it.
 
 **Review point C.** The user reviews migrations V3 to V7 and the ERD's as-built marks. pm then applies X4 (if the other pm is done).
+
+**Review point C: passed (user, 2026-10-15).** The main session verified a clean build: 1801 tests, 0 failed, migrations V1 to V7. `audit_log` is dropped. The ERD has 21 tables, 22 foreign keys and 8 enums. Notes:
+- **For qa (`QaSchemaTest` weakness):** the uniques list shows the expression index `uk_projects_org_id_name_lower` only as `"PROJECTS(ORG_ID)"`. It doesn't prove the `lower(name COLLATE "und-x-icu")` part. AC-2.3 covers that behaviour; qa may strengthen the check in its own files.
+- **G4 leftover:** the Javadoc at `support/UsesEmptyTestDatabase:16` is stale. It stays unless a later task's Allowed files name it.
+- **Build time:** about 3.0× H2. The NFR raises a question only for "more than 3×", so pm records this as acceptable at the edge. If a later batch pushes it above 3×, backend-swe reports it as a question; it doesn't work around it.
+- **For the future `auth-service-audit` spec:** it creates `audit_logs` in a new migration, V8 or later. V7 is applied and append-only (G11).
 
 ### Batch D: input strictness (review point D)
 
@@ -1528,7 +1597,29 @@ Each task: **test first** with direct SQL (P17), then the migration, then the F1
 
 **Review point D.**
 
+**Review point D: passed (user, 2026-10-15).** The main session verified a clean build: 1849 tests, 0 failed, 4m03s. The user accepted two mechanism deviations:
+- **T12 (E76):** Boot 4.1 has no `application.yaml` key for strict string coercion, so it's one `JsonMapperBuilderCustomizer` class, `configuration/StrictJsonStringsConfiguration` (E76's fallback).
+- **T13 (E77):** a binder-only `@ControllerAdvice`, `configuration/CanonicalUuidBinding`, with a strict UUID `PropertyEditor`. A registered converter can't work, because Spring's `TypeConverterDelegate` falls back to the lenient `UUIDEditor`. Controllers, guards and `ApiExceptionHandler` are unchanged.
+
 ### Batch E: developer experience, docs, end to end (review point E)
+
+**T14a. 1 s lock timeout in tests.** E-items: E82 (approved by the user on 2026-10-15). Runs before T14, so T14's final build includes it.
+- **Before you start:** record the `./gradlew clean build` time (review point D: 4m03s).
+- **Test first:** the new production-value test (it reads the `spring.datasource.hikari.data-source-properties.options` value from `application.yaml` and expects `-c lock_timeout=5s`). Then change `RowLockTimeoutTest:101` to `"1s"` and show it fails before the `TestDatabase` line exists.
+- **Change:**
+  - `support/TestDatabase`: one `registry.add("spring.datasource.hikari.data-source-properties.options", () -> "-c lock_timeout=1s")` line in `connectionPool`, and one Javadoc sentence saying tests use 1 s and production 5 s;
+  - `exception/RowLockTimeoutTest`: line 45 (Javadoc: "within the test lock timeout (1 s; production 5 s)"), 95 (`@DisplayName` names 1 s in tests), 96 (method name), 101 (`"1s"`). Lines 54 and 159 (7 s bound) stay, because AC-3.2's "within 7 seconds" still holds.
+- **qa lines (F1):** none expected. `QaFixRoundTest` (`:515-520`) and `LockFailureTest` (`:131-156`) hold locks but don't assert the timeout value or the wait time. If any qa test turns out to need a change, stop and report it; don't edit.
+- **ACs:** AC-3.2 (both rows, in about 1 s), the D10 value test (1 s in tests), and the new production-value test (5 s). All AC-3.x tests and the concurrency classes still pass.
+- **Done when:**
+  - the build is green;
+  - the concurrency classes (`RegistrationRaceTest`, `QaConcurrencyTest`, `QaFixRoundTest`, `ConcurrentWritesTest`, `RowLockTimeoutTest`, `LockFailureTest`) are green 3 runs in a row;
+  - the handoff reports the build time before and after.
+- **Stop conditions:**
+  - a concurrency test fails or flakes at 1 s, for example a lock-timeout 409 where it expected success (D10's stop condition). Report the waits; don't raise the value yourself;
+  - a start-up test (scratch database) needs a change.
+- **Allowed files:** `support/TestDatabase.java` (the line and the sentence above); `exception/RowLockTimeoutTest.java` lines 45, 95, 96 and 101; create the production-value test.
+- **Must not:** change `application.yaml` or `application-dev.yaml`; change any other test line; add `@DirtiesContext` (P21a).
 
 **T14. Dev SQL logging, README, contract sync, manual flow.** E-items: E78, E79, E80.
 - **ACs:** AC-8.1 (automated), AC-8.2 (manual), AC-1.7 (manual, if not done in T3).
@@ -1547,14 +1638,81 @@ Each task: **test first** with direct SQL (P17), then the migration, then the F1
 
 **Review point E.** Then qa verifies.
 
+### QA verification and fix round 1 (2026-10-15)
+
+**qa's verdict** (`docs/qa/auth-service-persistence-report.md`): signed off with known issues, conditional on pm.
+- 34 of 36 ACs pass, including all 6 P0 ACs. The two failures are variants outside the spec's rows: AC-1.6 (BUG-1) and AC-7.1 (BUG-2).
+- `clean build`: 1988 tests, 0 failed. The concurrency classes were green 3 runs in a row, and so was the gateway. `dbml2sql` gives 21 tables, 22 foreign keys and 8 enums. The manual run passed.
+
+**User decision, 2026-10-15:** fix BUG-1 and BUG-2 now in a short fix round. E83 and E84 are approved. F1-F4 apply (test first, the smallest change, no other files). The acceptance decision waits until qa re-verifies.
+
+**pm severity call:** **BUG-1 is S2.** A real database password printed in the start-up log breaks G12 and D5 ("never logged, at any level"). That's a security rule, even though it needs a password containing `${` and only shows on a failed start-up. Generated managed-database passwords can contain both characters. BUG-2 stays S3.
+
+| ID | Change | Files | Why | Task |
+|---|---|---|---|---|
+| E83 | **BUG-1.** Two changes: (1) the settings check rejects a value only when it's blank, or when the whole value is one unresolved placeholder `${NAME}`. A value that merely contains `${`, `$` or `{` is accepted. (2) No configured value ever appears in any log line, the failure report or the cause chain, whatever the reason for the rejection. If Boot's bind-validation failure report prints the rejected value (it does today), the check must fail in a way that report can't print. backend-swe verifies the mechanism and reports it (P20). | `configuration/DatabaseProperties.java`; `configuration/DataSourceDependsOnDatabaseProperties.java` and the `PropertiesConfiguration` registration line, only if the mechanism needs them; at most one new class in `configuration/`; tests | G12, D5, AC-1.6 | FR1 |
+| E84 | **BUG-2.** `CanonicalUuidEditor` matches the text exactly as received, with no trimming. A value with leading or trailing whitespace is 400 `MALFORMED_REQUEST`. The contract stays "36 characters" and isn't changed. | `configuration/CanonicalUuidBinding.java` (the `setAsText` lines only); tests | D13, AC-7.1 | FR1 |
+
+**FR1. Fix BUG-1 and BUG-2, and cheap test weaknesses.** E-items: E83, E84.
+- **Test first:** each new row must fail against the current code; report how it fails.
+  - BUG-1 (`configuration/DatabaseStartupTest` or a new start-up test, on a scratch database with a wrong password):
+    - the passwords `Qa${Pw-61`, `Pw${QA}61` and `Pw$QA{61}` pass the settings check. Start-up then fails only on the connection, and none of these values appears in the captured log or in the cause chain;
+    - each setting set to exactly `${AUTH_DB_PASSWORD}` (and likewise for the URL and username) is still rejected with the variable's name, as in AC-1.5, and the failure report doesn't contain the value;
+    - a blank value is still rejected with the variable's name.
+  - BUG-2 (`controller/CanonicalUuidTest`): `GET /api/orgs/%20{acme}`, `/api/orgs/{acme}%20`, `/api/orgs/%09{acme}` and `GET /internal/projects/%20{checkout}/access` all answer 400 `MALFORMED_REQUEST`.
+- **Test weaknesses (backend-swe's own phase-4 tests; cheap fixes only):**
+  - **W2 (required):** `CanonicalUuidTest` gets the BUG-2 rows above, plus a 35-character id with a 7-digit first group (this kills mutant M9).
+  - **W3 (required):** `DevSqlLoggingTest` must not depend on class order. Before the request, re-apply the dev profile's `org.hibernate.SQL` level from the context's environment, and restore the previous level afterwards (qa's `QaDevLoggingTest` does this). Show it passing when run after another context has started, for example `--tests` with a class that starts later.
+  - **W4 (cheap):** `TimestampColumnsTest` pins the 10 expected `table.column` names instead of `isNotEmpty()`.
+  - **W7 (cheap):** add `@DisplayName` to the AC tests that have none in `DatabaseStartupTest`, `ConcurrentWritesTest`, `ListOrderTest`, `CanonicalUuidTest`, `UtcTimestampsTest` and `TimestampColumnsTest`. This changes annotations only.
+  - **W1, W5, W6:** no change. qa's tests cover them (`#theServerErrorDetailNeverReachesAMessage`, `QaTimeZoneTest`, `#everyForeignKeyLeadsAValidFullIndex`).
+- **Done when:**
+  - `./gradlew clean build` is green, with counts reported for backend-swe and for qa;
+  - qa's `QaDatabaseSettingsTest` and `QaStrictInputTest` pass unchanged, or a changed outcome is reported, not edited;
+  - the handoff names the BUG-1 mechanism, with evidence: the captured failure output for `Qa${Pw-61` and for `${AUTH_DB_PASSWORD}`.
+- **Stop conditions:**
+  - keeping values out of Boot's failure report needs a file outside Allowed files, for example a `META-INF/spring.factories` entry for a failure analyzer (`src/main/resources/META-INF` is a new location under G1). Report the options;
+  - any existing assertion would need a different expected value;
+  - a qa test fails for a reason other than BUG-1 or BUG-2.
+- **Allowed files:**
+  - the files named in E83 and E84;
+  - `configuration/DatabaseStartupTest.java`, `controller/CanonicalUuidTest.java`, `configuration/DevSqlLoggingTest.java`, `repository/TimestampColumnsTest.java`, plus the `@DisplayName` lines in the W7 classes;
+  - create tests.
+- **Must not:** change the contract; touch qa's files; add a default for any `AUTH_DB_*` setting; trim or normalise anything else.
+
+**Then qa re-verifies:** BUG-1, BUG-2, AC-1.5, AC-1.6, AC-7.1 and the full build. While doing so, qa trims its own slowest additions where that's cheap (FU-21).
+
+**Triage of qa's other findings (pm, 2026-10-15).** Each line gives the default and the reason. None of them blocks acceptance.
+
+| FU | From | Priority | Default decision and reason | Owner |
+|---|---|---|---|---|
+| FU-17 | BUG-3 (S4), Q3 | P2, gate: phase 3 (with FU-2) | **Accept the generic 409 for now.** Java 17 has Unicode 13 tables, while ICU and the builtin provider have 15.x, so characters added in Unicode 14 or later lower-case differently. The result is a 409, never a 5xx or bad data, and only for very rare characters. Fix it with phase 3's text normalisation (FU-2): either reject code points unassigned in the runtime's Unicode version, or move to Java 21 or later. A10 is reworded below. | pm (phase 3), backend-swe |
+| FU-18 | BUG-4 (S4), Q4 | P2 | **Yes, the 254-character limit applies to the stored (trimmed, lower-cased) value**, as D8 item 2 says lengths match the API. Validate the length of the normalised email, so that this case is 400 `VALIDATION_FAILED` and not 409. Do it together with FU-2, which touches the same normalisation. | backend-swe (phase 3) |
+| FU-19 | BUG-5 (S4), Q6 | P2, with FU-1 | **Pool exhaustion should be a Problem 503**, never 401 and never Boot's 500 body. That needs a new error code and handling outside Spring MVC (in the JWT filter), which is FU-1's scope. It's recorded there and not built now. | pm (spec FU-1), backend-swe |
+| FU-20 | Q1, R3 | P2, with FU-2 | **Names made only of U+3164, U+2800, U+115F, U+FFA0, U+00AD, U+180E, U+200E/F, U+2061 or U+034F, and a project name prefixed with ZWSP, stay accepted until FU-2.** D11's closed set was approved, and widening it is a public validation change that belongs with normalisation. | pm (phase 3) |
+| FU-21 | Q5 | P2 | **The build is about 3.6× H2 (4m51s), so trim it.** qa trims its own phase-4 additions during re-verification (about 55 s, mostly `QaStrictInputTest` 24 s and `QaLockTimeoutTest` 13 s), for example by merging scratch-app starts or making rows parameterized in the shared context, and keeps every check. Target: at most about 3× (about 4m05s). If that isn't cheap, report the time and the build is accepted as it is. | qa |
+| FU-22 | R1 | P2 | `ddl-auto: validate` misses some drift (`timestamptz` to `timestamp`, a dropped NOT NULL, shorter lengths). Accepted for phase 4; `QaSchemaTest` pins the test database. A start-up schema check is a candidate for the database pattern later. | pm |
+| FU-23 | R6 | P2 | The entities' enum fields still say `varchar(255)` by default, but V4 has `varchar(32)`. Add `@Column(length = 32)` mirrors (pattern item 7) the next time those entities change. | backend-swe |
+
+**R7 (ERD):** done by pm on 2026-10-15. The stale `proposed (auth-service-persistence)` markers on `users.password_hash` and in the `invitations` note are removed.
+
 ### pm task
 **P1. ERD (X4): done 2026-10-14.** `docs/erd/cucumber.dbml` carries the `proposed (auth-service-persistence)` marks. The ERD README has the legend row and ERD-D12 and ERD-D13. The scenario_service group is unchanged. The main session still has to run `dbml2sql` (the README states the expected result). Original task text: pm applies "Proposed auth_service ERD after phase 4" once the scenario-service pm has finished with `docs/erd/`. This happens before Batch C starts, so backend-swe can turn the marks into as-built in T5 to T10. If that isn't possible in time, backend-swe updates the as-built lines directly in each task, under the README's maintenance rule. pm also records ERD-D12 and ERD-D13.
+
+**P2. As-built ERD after review point A: done 2026-10-15.** Decision: yes, the `auth_service` as-built lines describe V1 on PostgreSQL now, because H2 is gone and the "Runtime database today: H2" note had become false. Notes only (DBML stays valid; no table, column type, enum or Ref changed):
+- the Project note: as-built date 2026-10-15, runtime database PostgreSQL 17 + Flyway V1, `ddl-auto: validate`; the conventions say as-built enums are `varchar(255)` plus `CHECK (col IN (...))` and timestamps `timestamp(6) without time zone`;
+- the 6 enum columns: "As-built (V1): varchar(255) plus CHECK ck_<table>_<column>_values"; the proposed part of E71 is now only the narrowing to `varchar(32)` (plus NOT NULL from E70);
+- the two unique constraints carry their V1 names; the foreign-key comment says V1 already names them `fk_<table>_<column>` with the default delete rule, so E73 only adds `ON DELETE RESTRICT`;
+- H2 remarks removed (`users.status`, `invitations.role`, `audit_log.metadata`);
+- the ERD README: a "not yet validated" entry (expected `dbml2sql` result: exit 0, 22 tables, 26 foreign keys, 13 enums) and the as-built legend row.
+
+The `scenario_service` group is unchanged. The "As-built today (H2)" column of "Proposed auth_service ERD after phase 4" is the pre-V1 record; for the actual V1 types, read the DBML. From T5 on, backend-swe turns each `proposed (auth-service-persistence)` mark into as-built in the task whose migration lands (README "Maintenance").
 
 ## Breakdown
 
 | Area | Work | Depends on |
 |---|---|---|
-| auth-service | T1-T4 (Batch A, switch), T5 (B, time), T6-T10 (C, rules), T11-T13 (D, input), T14 (E, dev and docs) | Docker Desktop running (tests); the D5 dev container for dev and manual checks |
+| auth-service | T1-T4 (Batch A, switch; done 2026-10-15), T5 and T5b (B, time and settings validation), T6-T10 (C, rules), T11-T13 (D, input), T14 (E, dev and docs) | Docker Desktop running (tests); the D5 dev container for dev and manual checks |
 | api-gateway | **None.** No code, configuration or contract change (D18). The T14 manual flow runs through it. | — |
 | scenario-service | No work here. Its first spec adopts "Database pattern for every service" and the Q1 test approach. The coordination points (D18) go to the other pm now. | This spec's approval |
 | report-service | As scenario-service. | This spec's approval |
@@ -1572,7 +1730,7 @@ Each task: **test first** with direct SQL (P17), then the migration, then the F1
    - canonical UUIDs (T13).
 
    No path, operation or error code is added or removed. frontend-swe can rely on it after review point B.
-2. **C2. Configuration contract** (for deployment later): `AUTH_DB_URL`, `AUTH_DB_USERNAME`, `AUTH_DB_PASSWORD`, `JWT_SECRET`; PostgreSQL 17, UTF-8, builtin `C.UTF-8`; the role owns its database (Flyway runs at start-up). Written in the README (E79).
+2. **C2. Configuration contract** (for deployment later): `AUTH_DB_URL`, `AUTH_DB_USERNAME`, `AUTH_DB_PASSWORD`, `JWT_SECRET`; PostgreSQL 17, UTF-8, builtin `C.UTF-8`; the role owns its database (Flyway runs at start-up). Written in the README (E79). **Rule added 2026-10-15 (BUG-6, FU-24):** no `AUTH_DB_*` value, and in particular no password, may contain `${`. Spring resolves placeholders inside environment values, so such a value is substituted or printed in a start-up failure.
 3. **C3. Database pattern** (the reusable section): the contract between this phase and the next services' specs.
 4. **C5 (phase 2, unchanged):** the access check keeps its fields and rules. Its ids are canonical (FU-10) once T13 lands. FU-16 stays with the first consumer.
 
@@ -1678,8 +1836,81 @@ The original questions are kept below for the record.
 - A7. Existing tests that seed past or future timestamps relative to the system clock stay correct with the service clock, because the default clock is the system UTC clock. Only AC-4.2 and AC-4.3 replace it.
 - A8. Ordering by code point (D3) is the intended product order for organization lists and member lists, as on H2 today. A linguistic order would be a later UI decision.
 - A9. UUIDs inside JSON bodies (`userId` in add-member) keep Jackson's parsing. FU-10 covers path variables only; qa may report body-level leniency as an observation.
-- A10. PostgreSQL's `lower()` under builtin `C.UTF-8` agrees with Java's `toLowerCase(Locale.ROOT)` for every email the API accepts in practice. A disagreement would give 409 `CONFLICT` (D8 item 5) and would be recorded with FU-2.
+- A10. PostgreSQL's `lower()` under builtin `C.UTF-8` agrees with Java's `toLowerCase(Locale.ROOT)` for every email the API accepts in practice. A disagreement would give 409 `CONFLICT` (D8 item 5) and would be recorded with FU-2. **Corrected 2026-10-15 (T8):** the two disagree for U+0130 (`'İzmir'`). Project names therefore use `lower(name COLLATE "und-x-icu")`, which matches Java (D8 item 6). **Corrected again 2026-10-15 (qa BUG-3):** "Emails stay safe" was wrong. Java 17 uses Unicode 13 case tables, while ICU and the builtin provider use 15.x, so characters added in Unicode 14 or later (for example U+A7C0, U+2C2F, U+10570) lower-case differently. A project name or email containing them can get a generic 409 `CONFLICT` from the database instead of the application's answer. Every Unicode 13 pair qa tried agrees. This is accepted as FU-17.
 - A11. The phase-2 baseline of 1655 tests (679 backend-swe, 976 qa) is the reference for AC-3.1. Tests the user may add before Batch A join the baseline, and T3 reports them.
 
 ## Acceptance
 (Filled in by pm after qa sign-off.)
+
+**2026-10-15: pending.** qa's first report is in, and pm rates BUG-1 as S2, so the feature can't be accepted yet. The decision waits for fix round 1 (FR1: E83, E84) and qa's re-verification. Follow-ups FU-17 to FU-23 are triaged under "QA verification and fix round 1". (Superseded by the decision below.)
+
+### Decision: Accepted with follow-ups (pm, 2026-10-15)
+
+Based on qa's "Re-verification (fix round 1), 2026-10-15" in `docs/qa/auth-service-persistence-report.md` (verdict: signed off with known issues):
+- **Every AC has a result and passes:** 36 of 36 (P0 6/6, P1 23/23, P2 7/7).
+- **No S1, S2 or S3 bug is open.**
+  - BUG-1 (S2) is fixed by E83. qa verified it, including a real start-up with a role whose password contains `$`, `{` and `${`.
+  - BUG-2 (S3) is fixed by E84.
+  - Open bugs are S4 only: BUG-3 (FU-17), BUG-4 (FU-18), BUG-5 (FU-19) and BUG-6 (FU-24).
+- **Build:** `./gradlew clean build` passes 2021 tests (889 backend-swe, 1132 qa), 0 failed, 0 skipped, in 4m03s. The concurrency classes were green 3 runs in a row, and the gateway build is green.
+- **Fix round 1 is done:** E83, E84, and the weakness fixes W2, W3, W4 and W7. W1, W5 and W6 are covered by qa's tests.
+- **FU-21 is met and closed.** qa trimmed its own tests from 4m30s to 4m03s (target about 4m05s, about 3× H2) without dropping a check.
+- **Timestamp count correction:** V2 converted 10 columns. V7 dropped `audit_log.created_at`, so **9 timestamp columns** remain. This is the as-built count that `TimestampColumnsTest` and `QaSchemaTest` pin, and it replaces both the "13" in E69 and Code facts and the "10" in AC-4.4-related notes.
+
+**BUG-6 (S4), decided by pm: accept as a documented rule (FU-24).** Database passwords, and any `AUTH_DB_*` value, must not contain `${`. Reasons:
+- the failure comes from Spring's own placeholder resolution (`PlaceholderResolutionException`), before any auth-service code runs;
+- it needs a value that literally contains a placeholder;
+- operators choose the passwords;
+- a code fix needs a failure analyzer registered under `src/main/resources/META-INF`, which is a new location under G1 and out of this phase's scope.
+
+The rule is now in C2 and in the database pattern (item 4). backend-swe adds a README "Settings" note in the next task that touches `auth-service/README.md`. pm can't edit the README.
+
+### auth-service follow-up backlog (current after phase 4, 2026-10-15)
+
+This single table replaces the phase-1 (`docs/specs/auth-service.md`) and phase-2 (`docs/specs/auth-service-projects.md`) lists for current status.
+
+| ID | Priority / gate | Item | Status | Owner |
+|---|---|---|---|---|
+| FU-1 | P2 | Problems for errors outside Spring MVC (firewall rejections, `TRACE`, direct `/error`), with the gateway's FU-3. Now also includes FU-19. | Open | pm (spec), backend-swe, qa |
+| FU-2 | P2, phase 3 | NFC normalisation of emails, and NFC for name comparison. Carries FU-17, FU-18 and FU-20. | Open | pm (phase 3 spec) |
+| FU-3 | — | Blank and control characters, lone surrogates, extended to project names | **Closed** in phase 4 (E59, E75; AC-5.1, AC-6.1) | — |
+| FU-4 | — | Injectable `Clock` | **Closed** in phase 4 (E68; AC-4.2, AC-4.3) | — |
+| FU-5 | P2, not approved | Remaining tidy-ups: 3 stale test texts; tests off the deprecated jjwt API | Open | backend-swe |
+| FU-6 | — | No email in logs | Closed (phase 2) | — |
+| FU-7 | — | Contract wording for padded role strings | Done (phase 2) | — |
+| FU-8 | — | Re-verify the H2-specific behaviour on PostgreSQL | **Closed** in phase 4 (US-3, AC-2.4, AC-4.4) | — |
+| FU-9 | — | Gateway spec "Known issues" catch-up | Done (phase 2) | — |
+| FU-10 | — | Canonical UUID path variables | **Closed** in phase 4 (E77, E84; AC-7.1, AC-7.2) | — |
+| FU-11 | — | Reject non-string JSON for string fields | **Closed** in phase 4 (E76; AC-6.3) | — |
+| FU-12 | — | Name lengths in code points | **Closed** in phase 4 (E75; AC-6.2) | — |
+| FU-13 | P2, revisit in `auth-service-audit` | Re-check the actor's role under the organization lock in rename, archive, restore and add | Recorded, not approved | pm |
+| FU-14 | — | Dev SQL through `org.hibernate.SQL` with correlation | **Closed** in phase 4 (E78; AC-8.1, AC-8.2) | — |
+| FU-15 | P2, not approved (G4) | Test hygiene from phase 2 (strict stubs, partial state assertions, AC-7.3 401 body) | Open | backend-swe |
+| FU-16 | **P1, gate: the first C5 consumer** | Verify the C5 consumer rules (fail closed, no caching) in the consuming service | Open; scenario-service plans to close it for itself (its X3) | pm (consumer spec), qa |
+| FU-17 | P2, with FU-2 | BUG-3: Unicode 14+ case pairs differ between Java 17 and PostgreSQL (generic 409) | Open, accepted | pm (phase 3), backend-swe |
+| FU-18 | P2, with FU-2 | BUG-4: the 254 limit applies to the stored, lower-cased email (400, not 409) | Open | backend-swe (phase 3) |
+| FU-19 | P2, with FU-1 | BUG-5: pool exhaustion should give a 503 Problem, not 401 or Boot's 500 body | Open | pm (spec FU-1), backend-swe |
+| FU-20 | P2, with FU-2 | Other invisible code points in names (qa Q1, R3) | Open, accepted until FU-2 | pm (phase 3) |
+| FU-21 | — | Build time back to about 3× H2 | **Closed** 2026-10-15 (4m03s) | — |
+| FU-22 | P2 | `ddl-auto: validate` misses some drift; candidate start-up schema check | Open, accepted | pm |
+| FU-23 | P2 | Entity enum fields: `@Column(length = 32)` mirrors of V4 | Open, next time the entities change | backend-swe |
+| FU-24 | P2, docs | BUG-6: README "Settings" note that `AUTH_DB_*` values must not contain `${` (rule in C2) | Open | backend-swe (next README task) |
+| RC-1 | P2 | Hibernate violation inspection in `AuthServiceImpl` | Candidate, not approved | backend-swe |
+| RC-2 | P2 | Spring Security exceptions thrown from services | Candidate, not approved | backend-swe |
+| RC-3 | P2 | Duplicated `UserResponse` / `OrganizationResponse` mapping | Candidate, not approved | backend-swe |
+| RC-4 | P2 | Security infrastructure in `service/impl` | Candidate, not approved | backend-swe |
+| RC-5 | P2 | No-op Lombok `@NonNull` in `OrganizationResponse` | Candidate, not approved | backend-swe |
+| RC-6 | P2 | Stale lock texts in `handleLockFailure` Javadoc and `LockFailureTest`. Now also the "for update" comment near `LockFailureTest:185` (the SQL is "for no key update"). | Candidate, not approved | backend-swe |
+| RC-7 | P2 | JPA lock exception types no longer reached | Candidate, not approved | backend-swe |
+| RC-8 | P2, before production | `EmailAlreadyExistsException`: not an `ApiException`, with an email in its message | Candidate, not approved | backend-swe |
+| RC-9 | P2, before production | Email in the `UsernameNotFoundException` message | Candidate, not approved | backend-swe |
+| RC-10 | P2 | `JwtAuthenticationFilter` registered twice | Candidate, not approved | backend-swe |
+| RC-11 | P2 | Anonymous accept hashes the password with BCrypt while holding the organization lock | Candidate, not approved | backend-swe |
+| RC-12 | P2 | `User.passwordHash` has a redundant `@Column(nullable = true)` | Candidate, not approved | backend-swe |
+| RC-13 | P2 | Phase-4 G4 leftovers: H2 mention at `ProjectGuardTest:30`; stale Javadoc at `support/UsesEmptyTestDatabase:16` | Candidate, not approved | backend-swe |
+
+### Next
+
+- **scenario-service T2 onward is unblocked by its gate.** That gate was auth-service phase 4 passing its last review point (E), which is now passed, and phase 4 is accepted.
+- **One alignment step comes first, under scenario-service's X2:** "If phase 4 changes a pattern item, pm updates this spec before T2". Phase 4 refined pattern items 4, 10, 12, 14 and 16 (see "As proven by the reference implementation" under the database pattern). One of them is substantive: scenario-service's `uk_features_project_id_path_lower` uses `lower(path)`, and under item 10 it needs `COLLATE "und-x-icu"`. The scenario-service pm makes that update before T2.
+- Phase 3 (`auth-service-accounts`) picks up FU-2 together with FU-17, FU-18 and FU-20.

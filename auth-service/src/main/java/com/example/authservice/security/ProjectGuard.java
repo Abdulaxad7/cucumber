@@ -22,24 +22,18 @@ public class ProjectGuard {
 
     public boolean hasRole(UUID projectId, Authentication authentication, String role) {
         Optional<ProjectRole> required = parseRole(role);
-        if (required.isEmpty()) {
-            return false;
-        }
-        return callerId(authentication)
+        return required.map(projectRole -> callerId(authentication)
                 .flatMap(userId -> projectRoleService.getRoleForProject(userId, projectId))
-                .map(callerRole -> callerRole.isAtLeast(required.get()))
-                .orElse(false);
+                .map(callerRole -> callerRole.isAtLeast(projectRole))
+                .orElse(false)).orElse(false);
     }
 
     public boolean hasRole(UUID orgId, UUID projectId, Authentication authentication, String role) {
         Optional<ProjectRole> required = parseRole(role);
-        if (required.isEmpty()) {
-            return false;
-        }
-        return callerId(authentication)
+        return required.map(projectRole -> callerId(authentication)
                 .flatMap(userId -> projectRoleService.getRoleForProject(userId, orgId, projectId))
-                .map(callerRole -> callerRole.isAtLeast(required.get()))
-                .orElse(false);
+                .map(callerRole -> callerRole.isAtLeast(projectRole))
+                .orElse(false)).orElse(false);
     }
 
     private static Optional<UUID> callerId(Authentication authentication) {

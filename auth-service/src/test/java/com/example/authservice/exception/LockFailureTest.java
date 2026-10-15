@@ -27,7 +27,6 @@ import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -52,10 +51,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * and without a stack trace. The four outline rows make taking the organization lock fail with the given exception,
  * thrown from inside {@code EntityManager.find(…, PESSIMISTIC_WRITE)} by a test-only Hibernate statement inspector,
  * so the exception reaches the handler exactly as a real lock failure does. A further test holds the real row lock
- * from another connection. This class has its own context, so it uses its own H2 database.
+ * from another connection.
  */
 @AuthServiceIntegrationTest
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:lock-failure-test;DB_CLOSE_DELAY=-1")
 @ExtendWith(OutputCaptureExtension.class)
 class LockFailureTest {
 
@@ -208,7 +206,7 @@ class LockFailureTest {
         public String inspect(String sql) {
             Supplier<RuntimeException> current = failure;
             String normalized = sql.toLowerCase(Locale.ROOT);
-            if (current != null && normalized.contains(" from organizations ") && normalized.contains("for update")) {
+            if (current != null && normalized.contains(" from organizations ") && normalized.contains("for no key update")) {
                 failures++;
                 throw current.get();
             }

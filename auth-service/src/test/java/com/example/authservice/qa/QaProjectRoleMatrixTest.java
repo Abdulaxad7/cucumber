@@ -23,7 +23,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -143,7 +144,7 @@ class QaProjectRoleMatrixTest {
         }
         Project project = projectFixture.project(org, "P");
         if (op == Op.RESTORE) {
-            project.setArchivedAt(LocalDateTime.now().minusDays(1));
+            project.setArchivedAt(Instant.now().minus(1, ChronoUnit.DAYS));
             project = projectRepository.save(project);
         }
         projectFixture.member(project, target, ProjectRole.TESTER);

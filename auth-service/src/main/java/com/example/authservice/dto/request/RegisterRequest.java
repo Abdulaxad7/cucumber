@@ -8,6 +8,7 @@ public record RegisterRequest(
     @NotBlank(message = "Email cannot be blank")
     @Email(message = "Invalid email format")
     @Size(max = 254, message = "Email must be at most 254 characters long")
+    @StorableText(trimmed = true, message = "Email must not contain control characters or invalid Unicode characters")
     String email,
 
     @NotBlank(message = "Password cannot be blank")
@@ -16,6 +17,8 @@ public record RegisterRequest(
     String password,
 
     @NotBlank(message = "Full name cannot be blank")
-    @Size(max = 100, message = "Full name must be at most 100 characters long")
+    @VisibleText(message = "Full name cannot be blank")
+    @MaxCodePoints(value = 100, message = "Full name must be at most 100 characters long")
+    @StorableText(message = "Full name must not contain control characters or invalid Unicode characters")
     String fullName
 ) {}

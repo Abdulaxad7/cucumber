@@ -16,7 +16,6 @@ import org.springframework.boot.logging.LoggingSystem;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpHeaders;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -34,11 +33,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 /**
  * AC-9.4: an unexpected failure inside an advised service is logged once at ERROR by the exception handler, and the
  * aspect adds only DEBUG lines naming the exception type. The repository the real organization service calls is
- * stubbed, so the exception passes through the advised service (a mocked service bean isn't advised). This class has
- * its own context, so it uses its own H2 database.
+ * stubbed, so the exception passes through the advised service (a mocked service bean isn't advised).
  */
 @AuthServiceIntegrationTest
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:unexpected-failure-logging-test;DB_CLOSE_DELAY=-1")
 @ExtendWith(OutputCaptureExtension.class)
 class UnexpectedFailureLoggingTest {
 

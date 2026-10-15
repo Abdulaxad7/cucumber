@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,11 +23,11 @@ public interface InvitationRepository extends JpaRepository<Invitation, UUID> {
     Optional<Invitation> findLockedByIdAndOrganizationId(UUID id, UUID organizationId);
 
     boolean existsByOrganizationIdAndEmailAndStatusAndExpiresAtAfter(UUID organizationId, String email,
-                                                                     InvitationStatus status, LocalDateTime now);
+                                                                     InvitationStatus status, Instant now);
 
     long countByOrganizationIdAndStatusAndExpiresAtAfter(UUID organizationId, InvitationStatus status,
-                                                         LocalDateTime now);
+                                                         Instant now);
 
     List<Invitation> findByOrganizationIdAndStatusAndExpiresAtAfterOrderByCreatedAtAscIdAsc(
-            UUID organizationId, InvitationStatus status, LocalDateTime now);
+            UUID organizationId, InvitationStatus status, Instant now);
 }

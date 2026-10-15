@@ -12,7 +12,7 @@ import com.example.authservice.repository.ProjectRepository;
 import com.example.authservice.support.AcmeFixture.Acme;
 import lombok.RequiredArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -64,7 +64,7 @@ public class ProjectFixture {
         return projectRepository.save(Project.builder()
                 .organization(organization)
                 .name(name)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build());
     }
 
@@ -73,14 +73,14 @@ public class ProjectFixture {
                 .project(project)
                 .user(user)
                 .role(role)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build());
     }
 
     /** Seeds an archived state directly, for tests that run before the archive operation exists (T12). */
     public void archive(UUID projectId) {
         Project project = projectRepository.findById(projectId).orElseThrow();
-        project.setArchivedAt(LocalDateTime.now());
+        project.setArchivedAt(Instant.now());
         projectRepository.save(project);
     }
 

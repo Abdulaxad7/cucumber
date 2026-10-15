@@ -23,12 +23,9 @@ public class OrgGuard {
 
     public boolean hasRole(UUID orgId, Authentication authentication, String role) {
         Optional<OrganizationRole> required = parseRole(role);
-        if (required.isEmpty()) {
-            return false;
-        }
-        return callerRole(orgId, authentication)
-                .map(callerRole -> callerRole.isAtLeast(required.get()))
-                .orElse(false);
+        return required.map(organizationRole -> callerRole(orgId, authentication)
+                .map(callerRole -> callerRole.isAtLeast(organizationRole))
+                .orElse(false)).orElse(false);
     }
 
     public boolean isMember(UUID orgId, Authentication authentication) {

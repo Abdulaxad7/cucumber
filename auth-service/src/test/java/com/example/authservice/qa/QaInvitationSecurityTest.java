@@ -27,7 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
@@ -253,7 +253,7 @@ class QaInvitationSecurityTest {
         mockMvc.perform(json(post("/api/auth/register"),
                 "{\"email\":\"fay@example.com\",\"password\":\"Secret123!\",\"fullName\":\"Fay Lin\"}"));
         var invitation = invitationRepository.findByToken(t).orElseThrow();
-        invitation.setExpiresAt(LocalDateTime.now().minusSeconds(1));
+        invitation.setExpiresAt(Instant.now().minusSeconds(1));
         invitationRepository.save(invitation);
 
         // When

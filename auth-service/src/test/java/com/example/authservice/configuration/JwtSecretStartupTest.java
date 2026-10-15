@@ -17,6 +17,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.stream.Stream;
 
+import static com.example.authservice.support.TestDatabase.POSTGRES;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -59,11 +60,13 @@ class JwtSecretStartupTest {
     }
 
     private static ConfigurableApplicationContext start(String secret) {
-        // Command-line arguments take precedence over the environment; port 0 keeps 8081 free. The failed context
-        // drops its schema on close, so it gets its own in-memory database instead of the one other tests share.
+        // Command-line arguments take precedence over the environment; port 0 keeps 8081 free. The context gets the
+        // test database's connection settings.
         return new SpringApplicationBuilder(AuthServiceApplication.class)
                 .run("--server.port=0", "--spring.profiles.active=", "--app.jwtSecret=" + secret,
-                        "--spring.datasource.url=jdbc:h2:mem:jwt-secret-startup-test");
+                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                        "--spring.datasource.username=" + POSTGRES.getUsername(),
+                        "--spring.datasource.password=" + POSTGRES.getPassword());
     }
 
     private static List<String> messagesOf(Throwable failure) {

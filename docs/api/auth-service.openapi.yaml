@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: auth-service API
-  version: 1.2.1
+  version: 1.3.0
   summary: Accounts, login, organizations, invitations, members, projects and the project access check.
   description: |
     Contract C1 of `docs/specs/auth-service.md` (phase 1) and contracts C1 and C5 of
@@ -9,6 +9,25 @@ info:
     rules (C2). The paths, status codes and `code` values here come from the specs' acceptance criteria (AC-x.y) and
     are binding. Wording of `detail` and validation `message` texts is not part of the contract. Where an AC is cited
     without a spec, phase-1 operations refer to the phase-1 spec and project operations to the phase-2 spec.
+
+    ## Changes in 1.3.0 (auth-service phase 4, `docs/specs/auth-service-persistence.md`, 2026-10-15)
+
+    No path, operation or `code` value is added or removed, and existing success responses keep their fields. The
+    timestamp format and the stricter input rules below are the only visible changes; the move to PostgreSQL with
+    Flyway migrations is internal.
+    - **Timestamps are UTC** (phase-4 D6, T5): every timestamp is an ISO-8601 instant with a `Z` offset and 0 to 6
+      fraction digits, for example `2026-10-14T09:30:00.123456Z` (schema `Timestamp`, which replaces
+      `LocalDateTime`). Timestamps now carry a `Z` offset. Clients that parsed offset-less strings must accept an
+      offset. No client existed at the time of the change.
+    - Names and emails that contain a control character or a lone surrogate are 400 `VALIDATION_FAILED` (phase-4 D11
+      rule T1, T1); see the request field descriptions.
+    - Names made only of whitespace or invisible format characters are blank, and the 100-character name limits count
+      Unicode code points (phase-4 D11 rules T2 and T3, T11).
+    - A JSON number or boolean where a string belongs is 400 `MALFORMED_REQUEST`, no longer coerced to text (phase-4
+      D12, T12). `null` is unchanged: 400 `VALIDATION_FAILED`.
+    - Path ids must be canonical UUIDs (36 characters, hexadecimal digits in groups of 8-4-4-4-12; upper-case digits
+      are accepted and identify the same resource). Anything else, for example `1-1-1-1-1`, is 400
+      `MALFORMED_REQUEST` before authorization (phase-4 D13, T13).
 
     ## Changes in 1.2.1 (phase-2 T11 and T16, 2026-10-13)
 
@@ -34,6 +53,11 @@ info:
       That documents existing behaviour; `ProjectRole` gets the same wording.
     - Organization membership and role changes now carry through to projects (phase-2 US-6), as described under
       "Projects". The organization operations' paths, statuses and bodies don't change.
+
+    ## Implementation status (1.3.0, review point E, 2026-10-15)
+
+    Every operation in this file is implemented as described on PostgreSQL 17, including every 1.3.0 change,
+    pending qa verification of phase 4.
 
     ## Implementation status (1.2.1, review point C, 2026-10-13)
 
@@ -183,7 +207,7 @@ info:
     | Situation | Status | `code` |
     |---|---|---|
     | Bean Validation failure on a body or parameter | 400 | `VALIDATION_FAILED` (with `errors`) |
-    | Unreadable JSON, a wrong enum value (including a number or a string of digits), a malformed UUID in the path | 400 | `MALFORMED_REQUEST` |
+    | Unreadable JSON, a JSON number or boolean where a string belongs (phase-4 D12), a wrong enum value (including a number or a string of digits), a path id that isn't a canonical UUID (phase-4 D13) | 400 | `MALFORMED_REQUEST` |
     | No or invalid credentials on a protected operation | 401 | `UNAUTHENTICATED` |
     | Wrong email or password (including a password over 72 UTF-8 bytes), or a suspended account, at login | 401 | `INVALID_CREDENTIALS` |
     | Authenticated, but not allowed (not a member, role too low; for projects also no access, an unknown project, or a project of another organization) | 403 | `FORBIDDEN` |
@@ -234,9 +258,9 @@ info:
     - auth-service never emits CORS headers (`Access-Control-*`); the gateway is the CORS authority (AC-1.8).
     - Emails are trimmed and lower-cased before they are stored or compared (D12), at registration, login,
       invitation and acceptance. Validation runs on the raw input.
-    - Timestamps (`createdAt`, `expiresAt`, `joinedAt`, `archivedAt`) are ISO-8601 local date-times **without an
-      offset**, in the server's time zone (spec assumption A4), for example `2026-10-12T09:30:00.123456`. UTC instants
-      come in phase 4.
+    - Timestamps (`createdAt`, `expiresAt`, `joinedAt`, `archivedAt`) are UTC instants: ISO-8601 with a `Z` offset and
+      0 to 6 fraction digits (microseconds at most), for example `2026-10-14T09:30:00.123456Z` (phase-4 D6). The
+      server's time zone never changes them.
     - Lists are not paginated in phase 1 or phase 2.
   x-spec: docs/specs/auth-service.md
   x-spec-projects: docs/specs/auth-service-projects.md
@@ -304,7 +328,7 @@ paths:
                 fullName: Fay Lin
                 status: PENDING_VERIFICATION
                 mfaEnabled: false
-                createdAt: '2026-10-12T09:30:00.123456'
+                createdAt: '2026-10-12T09:30:00.123456Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '406':
@@ -479,13 +503,13 @@ paths:
                   fullName: Fay Lin
                   status: PENDING_VERIFICATION
                   mfaEnabled: false
-                  createdAt: '2026-10-11T18:02:11.5'
+                  createdAt: '2026-10-11T18:02:11.5Z'
                 organization:
                   id: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                   name: Acme QA
                   plan: FREE
                   seatLimit: 5
-                  createdAt: '2026-10-01T08:00:00'
+                  createdAt: '2026-10-01T08:00:00Z'
                   myRole: MEMBER
         '201':
           description: A new account was created and joined the organization.
@@ -500,13 +524,13 @@ paths:
                   fullName: Fay Lin
                   status: PENDING_VERIFICATION
                   mfaEnabled: false
-                  createdAt: '2026-10-12T09:30:00.123456'
+                  createdAt: '2026-10-12T09:30:00.123456Z'
                 organization:
                   id: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                   name: Acme QA
                   plan: FREE
                   seatLimit: 5
-                  createdAt: '2026-10-01T08:00:00'
+                  createdAt: '2026-10-01T08:00:00Z'
                   myRole: MEMBER
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -603,7 +627,7 @@ paths:
                 name: Globex QA
                 plan: FREE
                 seatLimit: 5
-                createdAt: '2026-10-12T09:30:00.123456'
+                createdAt: '2026-10-12T09:30:00.123456Z'
                 myRole: OWNER
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -642,13 +666,13 @@ paths:
                   name: Acme QA
                   plan: FREE
                   seatLimit: 5
-                  createdAt: '2026-10-01T08:00:00'
+                  createdAt: '2026-10-01T08:00:00Z'
                   myRole: OWNER
                 - id: 9d2f7c41-1e3b-4a6d-b5c8-3f0a2e7d9b14
                   name: Initech QA
                   plan: FREE
                   seatLimit: 5
-                  createdAt: '2026-10-05T14:12:45.25'
+                  createdAt: '2026-10-05T14:12:45.25Z'
                   myRole: READER
         '401':
           $ref: '#/components/responses/Unauthenticated'
@@ -737,8 +761,8 @@ paths:
                 email: fay@example.com
                 role: MEMBER
                 status: PENDING
-                createdAt: '2026-10-12T09:30:00.123456'
-                expiresAt: '2026-10-19T09:30:00.123456'
+                createdAt: '2026-10-12T09:30:00.123456Z'
+                expiresAt: '2026-10-19T09:30:00.123456Z'
                 token: q3Xb0v6m1T2cJw8Hk4Zr9Ya5Lp7Nd0Es
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -885,12 +909,12 @@ paths:
                   email: ana@example.com
                   fullName: Ana Lima
                   role: OWNER
-                  joinedAt: '2026-10-01T08:00:00'
+                  joinedAt: '2026-10-01T08:00:00Z'
                 - userId: 1f3d5b7a-9c2e-4a6b-8d0f-2e4c6a8b0d13
                   email: ben@example.com
                   fullName: Ben Ode
                   role: ADMIN
-                  joinedAt: '2026-10-02T10:20:30.5'
+                  joinedAt: '2026-10-02T10:20:30.5Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1068,7 +1092,7 @@ paths:
                 id: 5d3c1b7e-2a4f-4e6d-9c8b-1f0e3d2a7b95
                 orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                 name: Mobile App
-                createdAt: '2026-10-13T09:30:00.123456'
+                createdAt: '2026-10-13T09:30:00.123456Z'
                 archivedAt: null
                 myRole: ADMIN
         '400':
@@ -1126,13 +1150,13 @@ paths:
                 - id: 7a1e5c3d-9b2f-4d8a-a6e0-3c5b7d9f1e24
                   orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                   name: Billing
-                  createdAt: '2026-10-02T10:00:00'
-                  archivedAt: '2026-10-13T08:15:42.5'
+                  createdAt: '2026-10-02T10:00:00Z'
+                  archivedAt: '2026-10-13T08:15:42.5Z'
                   myRole: ADMIN
                 - id: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
                   orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                   name: Checkout
-                  createdAt: '2026-10-01T09:00:00'
+                  createdAt: '2026-10-01T09:00:00Z'
                   archivedAt: null
                   myRole: ADMIN
         '400':
@@ -1172,7 +1196,7 @@ paths:
                 id: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
                 orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                 name: Checkout
-                createdAt: '2026-10-01T09:00:00'
+                createdAt: '2026-10-01T09:00:00Z'
                 archivedAt: null
                 myRole: TESTER
         '400':
@@ -1274,8 +1298,8 @@ paths:
                 id: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
                 orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
                 name: Checkout
-                createdAt: '2026-10-01T09:00:00'
-                archivedAt: '2026-10-13T09:30:00.123456'
+                createdAt: '2026-10-01T09:00:00Z'
+                archivedAt: '2026-10-13T09:30:00.123456Z'
                 myRole: ADMIN
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -1361,12 +1385,12 @@ paths:
                   email: cai@example.com
                   fullName: Cai Ng
                   role: ADMIN
-                  joinedAt: '2026-10-01T09:05:00'
+                  joinedAt: '2026-10-01T09:05:00Z'
                 - userId: 8e0a2c4d-6f1b-4d3e-a5c7-9b1d3f5a7c40
                   email: hal@example.com
                   fullName: Hal Ito
                   role: TESTER
-                  joinedAt: '2026-10-03T11:45:10.25'
+                  joinedAt: '2026-10-03T11:45:10.25Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1424,7 +1448,7 @@ paths:
                 email: ivy@example.com
                 fullName: Ivy Moss
                 role: TESTER
-                joinedAt: '2026-10-13T09:30:00.123456'
+                joinedAt: '2026-10-13T09:30:00.123456Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1739,7 +1763,9 @@ components:
           type: string
           format: email
           maxLength: 254
-          description: Validated as typed, then trimmed and lower-cased before storing.
+          description: |
+            Validated as typed, then trimmed and lower-cased before storing. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`).
         password:
           type: string
           format: password
@@ -1751,7 +1777,11 @@ components:
           minLength: 1
           maxLength: 100
           pattern: '\S'
-          description: Not blank, at most 100 characters.
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Stored as sent, so it must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate anywhere, including tabs and line breaks (400 `VALIDATION_FAILED`).
     LoginRequest:
       type: object
       required:
@@ -1761,7 +1791,9 @@ components:
         email:
           type: string
           format: email
-          description: Matched case-insensitively.
+          description: |
+            Matched case-insensitively. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`).
         password:
           type: string
           format: password
@@ -1796,6 +1828,11 @@ components:
           minLength: 1
           maxLength: 100
           pattern: '\S'
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Stored as sent, so it must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate anywhere, including tabs and line breaks (400 `VALIDATION_FAILED`).
     AcceptInvitationResponse:
       type: object
       required:
@@ -1816,7 +1853,11 @@ components:
           minLength: 1
           maxLength: 100
           pattern: '\S'
-          description: Not blank, at most 100 characters. Duplicates are allowed.
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Duplicates are allowed. Stored as sent, so it must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate anywhere, including tabs and line breaks (400 `VALIDATION_FAILED`).
     InviteMemberRequest:
       type: object
       required:
@@ -1827,7 +1868,9 @@ components:
           type: string
           format: email
           maxLength: 254
-          description: Validated as typed, then trimmed and lower-cased.
+          description: |
+            Validated as typed, then trimmed and lower-cased. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`).
         role:
           $ref: '#/components/schemas/OrganizationRole'
     ChangeMemberRoleRequest:
@@ -1861,7 +1904,7 @@ components:
         mfaEnabled:
           type: boolean
         createdAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
     Organization:
       type: object
       required:
@@ -1892,7 +1935,7 @@ components:
           minimum: 0
           description: Maximum seats (members + pending unexpired invitations). `null` means unlimited.
         createdAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
         myRole:
           $ref: '#/components/schemas/OrganizationRole'
     Invitation:
@@ -1917,9 +1960,9 @@ components:
         status:
           $ref: '#/components/schemas/InvitationStatus'
         createdAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
         expiresAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
     CreatedInvitation:
       description: The create-invitation response, the only one that contains the acceptance token.
       allOf:
@@ -1953,7 +1996,7 @@ components:
         role:
           $ref: '#/components/schemas/OrganizationRole'
         joinedAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
     OrganizationRole:
       type: string
       enum:
@@ -2001,11 +2044,11 @@ components:
           type: string
           description: Trimmed. Unique in the organization, ignoring letter case.
         createdAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
         archivedAt:
           description: When the project was archived; `null` while it is active. Always present.
           anyOf:
-            - $ref: '#/components/schemas/LocalDateTime'
+            - $ref: '#/components/schemas/Timestamp'
             - type: 'null'
         myRole:
           $ref: '#/components/schemas/ProjectRole'
@@ -2031,7 +2074,7 @@ components:
           $ref: '#/components/schemas/ProjectRole'
           description: The member's explicit project role.
         joinedAt:
-          $ref: '#/components/schemas/LocalDateTime'
+          $ref: '#/components/schemas/Timestamp'
     ProjectAccess:
       type: object
       description: The access check's answer (contract C5). Fields are only ever added.
@@ -2064,8 +2107,11 @@ components:
           maxLength: 100
           pattern: '\S'
           description: |
-            Not blank, at most 100 characters. Stored trimmed; unique in the organization, ignoring case. The length is
-            counted before trimming.
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Stored trimmed; unique in the organization, ignoring case. The length is
+            counted before trimming. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`); characters that trimming removes don't count.
     RenameProjectRequest:
       type: object
       required:
@@ -2113,11 +2159,12 @@ components:
       description: |
         Listed invitations are always `PENDING`. Expiry is computed from `expiresAt`; the stored status of an expired
         invitation may still be `PENDING` (spec A9).
-    LocalDateTime:
+    Timestamp:
       type: string
-      description: ISO-8601 local date-time without an offset, in the server's time zone (spec A4).
-      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?$'
-      example: '2026-10-12T09:30:00.123456'
+      format: date-time
+      description: A UTC instant, ISO-8601 with a `Z` offset and 0 to 6 fraction digits (phase-4 D6).
+      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$'
+      example: '2026-10-14T09:30:00.123456Z'
     ErrorCode:
       type: string
       description: The stable machine-readable error code (D2). New codes need a spec change.
@@ -2219,8 +2266,10 @@ components:
   responses:
     BadRequest:
       description: |
-        `VALIDATION_FAILED` (Bean Validation failure; the body has `errors`), or `MALFORMED_REQUEST` (unreadable JSON,
-        an unknown enum value such as an unknown `role` or a `role` sent as a number, or a path id that isn't a UUID).
+        `VALIDATION_FAILED` (Bean Validation failure; the body has `errors`; a `null` string field is also
+        `VALIDATION_FAILED`), or `MALFORMED_REQUEST` (unreadable JSON, a JSON number or boolean where a string belongs,
+        an unknown enum value such as an unknown `role` or a `role` sent as a number, or a path id that isn't a
+        canonical UUID: 8-4-4-4-12 hexadecimal digits, upper case accepted).
       content:
         application/problem+json:
           schema:

@@ -36,7 +36,8 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
 
@@ -52,6 +53,7 @@ public class InvitationServiceImpl implements InvitationService {
     private final UserRepository userRepository;
     private final AuthService authService;
     private final Validator validator;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -77,7 +79,7 @@ public class InvitationServiceImpl implements InvitationService {
     private AcceptInvitationResponse acceptValidated(String token, UUID callerId, AcceptInvitationRequest newAccount) {
         Invitation invitation = invitationRepository.findLockedByToken(token)
                 .orElseThrow(InvitationNotFoundException::new);
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now(clock);
         checkAcceptable(invitation, now);
         String invitedEmail = EmailNormalizer.normalize(invitation.getEmail());
         Organization organization = invitation.getOrganization();
@@ -123,7 +125,7 @@ public class InvitationServiceImpl implements InvitationService {
                 user.getStatus(), user.isMfaEnabled(), user.getCreatedAt()), joined);
     }
 
-    private static void checkAcceptable(Invitation invitation, LocalDateTime now) {
+    private static void checkAcceptable(Invitation invitation, Instant now) {
         switch (invitation.getStatus()) {
             case ACCEPTED -> throw InvitationGoneException.alreadyAccepted();
             case REVOKED -> throw InvitationGoneException.revoked();

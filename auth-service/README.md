@@ -5,7 +5,8 @@ The API contract is `docs/api/auth-service.openapi.yaml`; the runtime `/v3/api-d
 
 ## Run locally
 
-Requirements: JDK 17 (the Gradle toolchain), nothing else. The database is in-memory H2, recreated at every start.
+Requirements: JDK 17 (the Gradle toolchain) and a PostgreSQL 17 database; see "Running locally with PostgreSQL" below.
+Data survives restarts, and the schema comes from Flyway migrations ("Database and migrations").
 
 ```sh
 cd auth-service
@@ -14,14 +15,17 @@ cd auth-service
 
 - Port: **8081** (`server.port`). Normal clients call it through the API gateway on port 8080; direct calls on 8081
   are for local development only.
-- The `dev` profile supplies a development-only JWT secret and logs Hibernate SQL. Never use the `dev` profile
-  outside a developer machine.
-- Without the `dev` profile you must set `JWT_SECRET` (setting `app.jwtSecret`): the standard Base64 encoding of
-  at least 64 random bytes, the same value the gateway uses. The service refuses to start without a usable secret.
+- The `dev` profile supplies a development-only JWT secret and database settings, and logs SQL statements through the
+  logger `org.hibernate.SQL` (with request and user ids, `?` placeholders only). Never use the `dev` profile outside a
+  developer machine.
+- Without the `dev` profile you must set `AUTH_DB_URL`, `AUTH_DB_USERNAME`, `AUTH_DB_PASSWORD` and `JWT_SECRET`
+  (setting `app.jwtSecret`). `JWT_SECRET` is the standard Base64 encoding of at least 64 random bytes, the same value
+  the gateway uses. The service refuses to start without a usable secret.
   For example, generate one with `head -c 64 /dev/urandom | base64` and keep it out of version control.
 
 ```sh
-JWT_SECRET='<standard Base64 of at least 64 random bytes>' ./gradlew bootRun
+AUTH_DB_URL='jdbc:postgresql://localhost:5432/auth_service' AUTH_DB_USERNAME='auth_service' \
+  AUTH_DB_PASSWORD='<password>' JWT_SECRET='<standard Base64 of at least 64 random bytes>' ./gradlew bootRun
 ```
 
 ## Settings
@@ -31,13 +35,79 @@ JWT_SECRET='<standard Base64 of at least 64 random bytes>' ./gradlew bootRun
 | `app.jwtSecret` (`JWT_SECRET`) | none (the `dev` profile sets one) | Shared HS512 secret, standard Base64 of at least 64 bytes |
 | `app.jwtExpirationInMs` | `86400000` (24 h) | Lifetime of issued tokens |
 | `app.orgs.free-seat-limit` | `5` | Seat limit of every organization created in phase 1 (plan `FREE`); must be positive |
+| `spring.datasource.url` (`AUTH_DB_URL`) | none (the `dev` profile sets one) | JDBC URL of the auth_service database, without credentials |
+| `spring.datasource.username` (`AUTH_DB_USERNAME`) | none (the `dev` profile sets one) | Database role |
+| `spring.datasource.password` (`AUTH_DB_PASSWORD`) | none (the `dev` profile sets one) | Database password; never logged |
+
+A missing or blank `AUTH_DB_*` value stops start-up with a message that names the variable and never shows a value.
+
+## Running locally with PostgreSQL
+
+The `dev` profile expects PostgreSQL 17 on `localhost:5432`, database and role `auth_service`, password
+`auth_service_dev_only` (DEV ONLY values in `application-dev.yaml`). The database must use UTF-8 and the builtin
+`C.UTF-8` locale, which exists from PostgreSQL 17 on, so lists sort by code point on every machine.
+
+Recommended: a Docker container (Docker Desktop runs for the tests anyway). One-time setup:
+
+1. Free port 5432. If Postgres.app (or another server) holds it, quit it, or use another host port and override the URL
+   (see below).
+2. Start the container:
+
+   ```sh
+   docker run -d --name cucumber-postgres --restart unless-stopped -p 5432:5432 \
+     -e POSTGRES_USER=auth_service -e POSTGRES_PASSWORD=auth_service_dev_only -e POSTGRES_DB=auth_service \
+     -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8" \
+     -v cucumber-postgres-data:/var/lib/postgresql/data postgres:17
+   ```
+
+3. Run auth-service with the `dev` profile (see "Run locally"). Flyway applies the migrations at the first start; data
+   lives in the `cucumber-postgres-data` volume and survives restarts.
+
+On another host port, for example 5433 (`-p 5433:5432`), override the URL on the command line:
+
+```sh
+./gradlew bootRun --args='--spring.profiles.active=dev --spring.datasource.url=jdbc:postgresql://localhost:5433/auth_service'
+```
+
+Alternative: a PostgreSQL 17 server of your own (for example Postgres.app with a version 17 server), with:
+
+```sql
+CREATE ROLE auth_service LOGIN PASSWORD 'auth_service_dev_only';
+CREATE DATABASE auth_service OWNER auth_service TEMPLATE template0 ENCODING 'UTF8'
+    LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF-8';
+```
+
+Check the database with `SELECT datlocprovider, datlocale FROM pg_database WHERE datname = 'auth_service'`
+(expected: `b`, `C.UTF-8`). Other services add their own role and database to the same server.
+
+## Database and migrations
+
+- **Flyway owns the schema.** Migrations are `src/main/resources/db/migration/V<n>__<snake_case_description>.sql`,
+  applied once, in version order, at start-up; `flyway_schema_history` records them. Hibernate only validates
+  (`spring.jpa.hibernate.ddl-auto: validate`), so a schema that doesn't match the entities stops start-up, and so does
+  an applied migration whose file was edited (checksum mismatch).
+- **Append-only:** once a migration has passed review, it is never edited; a fix is a new version. One migration per
+  approved change; no `R__` or Java migrations, no `IF [NOT] EXISTS`. Never run Flyway `clean`, `repair` or `baseline`.
+- **Names:** `pk_<table>`, `fk_<table>_<column>`, `uk_<table>_<columns>`, `ix_<table>_<columns>`,
+  `ck_<table>_<column>_<rule>`.
+- **Types and rules:** ids `uuid` (generated by the application); timestamps `timestamptz` mapped to `Instant`, set
+  from the service clock (UTC, microseconds); enums `varchar(32)` with a `CHECK` listing the Java constants; NOT NULL
+  for every value the application always sets; emails stored lower case (`CHECK`); project names unique per
+  organization ignoring case (`lower(name COLLATE "und-x-icu")`); every foreign-key column indexed, every foreign key
+  `ON DELETE RESTRICT`.
+- **Migrations so far:** V1 baseline (the original entities), V2 timestamps with time zone, V3 required columns and
+  lengths, V4 enum value checks, V5 case-insensitive uniqueness, V6 foreign-key indexes and delete rules, V7 drop
+  `audit_log`.
+- **Connections:** every connection waits at most 5 s for a lock (`lock_timeout`; tests use 1 s), and database error
+  details, which can contain stored values, are kept out of exception messages (`logServerErrorDetail=false`).
+- The ERD is `docs/erd/cucumber.dbml`; the rules shared with the other services are in
+  `docs/specs/auth-service-persistence.md`, section "Database pattern for every service".
 
 ## Public operations
 
 Exactly three operations work without a token: `POST /api/auth/register`, `POST /api/auth/login` and
 `POST /api/auth/invitations/{token}/accept`. Swagger UI (`/swagger-ui/**`) and `/v3/api-docs` are public on port
-8081 only. Every other path needs `Authorization: Bearer <accessToken>` and otherwise gets a 401 Problem. The H2
-console is off.
+8081 only. Every other path needs `Authorization: Bearer <accessToken>` and otherwise gets a 401 Problem.
 
 ## Projects
 
@@ -95,7 +165,9 @@ cd auth-service
 ./gradlew test --tests 'com.example.authservice.controller.MembersTest'
 ```
 
-Tests use a TEST-ONLY secret defined in test code and the in-memory database; they need no environment variables.
+Tests use a TEST-ONLY secret defined in test code and a PostgreSQL 17 Testcontainers container (one per test run,
+shared by every test). **Docker must be running**; a build without it fails, nothing is skipped. They need no
+environment variables and no local database. The first build downloads the `postgres:17` image.
 
 ## Manual end-to-end check through the gateway
 

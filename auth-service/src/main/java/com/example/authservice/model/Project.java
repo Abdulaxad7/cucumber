@@ -7,7 +7,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -27,10 +27,12 @@ public class Project {
     @JoinColumn(name = "org_id", nullable = false)
     private Organization organization;
 
+    @Column(nullable = false, length = 100)
     private String name;
 
-    private LocalDateTime createdAt;
+    @Column(nullable = false)
+    private Instant createdAt;
 
-    private LocalDateTime archivedAt;
+    private Instant archivedAt;
 
 }

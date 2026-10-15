@@ -3,13 +3,14 @@ package com.example.authservice.repository;
 import com.example.authservice.enums.Plan;
 import com.example.authservice.model.Organization;
 import com.example.authservice.model.Project;
+import com.example.authservice.support.UsesEmptyTestDatabase;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,10 +20,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * has a {@code secret_token} column (D8).
  */
 @DataJpaTest
+@UsesEmptyTestDatabase
 class ProjectRepositoryTest {
 
-    private static final LocalDateTime CREATED_AT = LocalDateTime.of(2026, 10, 13, 9, 30, 0);
-    private static final LocalDateTime ARCHIVED_AT = LocalDateTime.of(2026, 10, 13, 10, 15, 30, 123_456_000);
+    private static final Instant CREATED_AT = Instant.parse("2026-10-13T09:30:00Z");
+    private static final Instant ARCHIVED_AT = Instant.parse("2026-10-13T10:15:30.123456Z");
 
     @Autowired
     private ProjectRepository projectRepository;

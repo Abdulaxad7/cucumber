@@ -30,8 +30,8 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -53,6 +53,7 @@ public class ProjectServiceImpl implements ProjectService {
     private final ProjectMembershipRepository projectMembershipRepository;
     private final OrgMembershipRepository orgMembershipRepository;
     private final ProjectRoleService projectRoleService;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -63,7 +64,7 @@ public class ProjectServiceImpl implements ProjectService {
         Project project = projectRepository.save(Project.builder()
                 .organization(organization)
                 .name(name)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now(clock))
                 .build());
         log.info("Project {} created in organization {} by user {}", project.getId(), orgId, actorId);
         return toResponse(project, actorId);
@@ -104,7 +105,7 @@ public class ProjectServiceImpl implements ProjectService {
         lockOrganization(orgId);
         Project project = findProject(orgId, projectId);
         if (project.getArchivedAt() == null) {
-            project.setArchivedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
+            project.setArchivedAt(Instant.now(clock));
             log.info("Project {} in organization {} archived by user {}", projectId, orgId, actorId);
         }
         return toResponse(project, actorId);
@@ -148,7 +149,7 @@ public class ProjectServiceImpl implements ProjectService {
                 .project(project)
                 .user(target.getUser())
                 .role(request.role())
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now(clock))
                 .build());
         log.info("User {} added to project {} in organization {} by user {}", request.userId(), projectId, orgId,
                 actorId);

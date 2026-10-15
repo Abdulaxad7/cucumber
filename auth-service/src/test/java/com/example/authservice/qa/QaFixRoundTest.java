@@ -34,7 +34,8 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -141,7 +142,7 @@ class QaFixRoundTest {
     void notPendingComesBeforeTheCeilingForEveryFinalStatus(InvitationStatus status) throws Exception {
         // Given
         Invitation invitation = QaSupport.seedInvitation(invitationRepository, acmeOrg(), acme.ana(), FAY,
-                OrganizationRole.OWNER, status, LocalDateTime.now().plusDays(7), "inv-order-QA");
+                OrganizationRole.OWNER, status, Instant.now().plus(7, ChronoUnit.DAYS), "inv-order-QA");
         String path = invitations() + "/" + invitation.getId();
 
         // When

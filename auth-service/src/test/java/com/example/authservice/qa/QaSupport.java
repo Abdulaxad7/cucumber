@@ -16,7 +16,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import javax.crypto.Mac;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -80,7 +81,7 @@ final class QaSupport {
 
     static Invitation seedInvitation(InvitationRepository repository, Organization organization, User invitedBy,
                                      String email, OrganizationRole role, InvitationStatus status,
-                                     LocalDateTime expiresAt, String token) {
+                                     Instant expiresAt, String token) {
         return repository.save(Invitation.builder()
                 .email(email)
                 .organization(organization)
@@ -88,7 +89,7 @@ final class QaSupport {
                 .invitedBy(invitedBy)
                 .token(token)
                 .status(status)
-                .createdAt(expiresAt.minusDays(7))
+                .createdAt(expiresAt.minus(7, ChronoUnit.DAYS))
                 .expiresAt(expiresAt)
                 .build());
     }
@@ -96,7 +97,7 @@ final class QaSupport {
     static Invitation seedPendingInvitation(InvitationRepository repository, Organization organization,
                                             User invitedBy, String email, OrganizationRole role, String token) {
         return seedInvitation(repository, organization, invitedBy, email, role, InvitationStatus.PENDING,
-                LocalDateTime.now().plusDays(7), token);
+                Instant.now().plus(7, ChronoUnit.DAYS), token);
     }
 
     /** Starts every call at the same moment and returns the results in call order. */

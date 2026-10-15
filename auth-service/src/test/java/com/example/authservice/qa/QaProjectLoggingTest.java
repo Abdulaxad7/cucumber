@@ -28,7 +28,6 @@ import org.springframework.core.env.MapPropertySource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -66,12 +65,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  *       project name (AC-9.9, AC-9.13, NFR "Audit": project INFO lines contain ids only);</li>
  *   <li>the MDC is empty after each request (AC-9.8).</li>
  * </ul>
- * This class has its own context, so it uses its own H2 database (G3).
+ * This class has its own context and shares the PostgreSQL test database.
  */
 @AuthServiceIntegrationTest
 @Import(ProjectFixture.class)
 @ContextConfiguration(initializers = QaProjectLoggingTest.DevToolsDefaults.class)
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:qa-project-logging;DB_CLOSE_DELAY=-1")
 @ExtendWith(OutputCaptureExtension.class)
 class QaProjectLoggingTest {
 

@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 /**
  * AC-9.5: a call slower than {@code app.logging.slow-call-threshold} is logged at WARN, without personal data. Each
- * outline row sets its own threshold, so each has its own context and its own H2 database.
+ * outline row sets its own threshold, so each has its own context.
  */
 @AuthServiceIntegrationTest
 @ExtendWith(OutputCaptureExtension.class)
@@ -31,8 +31,7 @@ class SlowCallLoggingTest {
 
     @Nested
     @TestPropertySource(properties = {
-            "app.logging.slow-call-threshold=1ms",
-            "spring.datasource.url=jdbc:h2:mem:slow-call-1ms-test;DB_CLOSE_DELAY=-1"})
+            "app.logging.slow-call-threshold=1ms"})
     class ThresholdOfOneMillisecond {
 
         @Autowired
@@ -60,8 +59,7 @@ class SlowCallLoggingTest {
 
     @Nested
     @TestPropertySource(properties = {
-            "app.logging.slow-call-threshold=1h",
-            "spring.datasource.url=jdbc:h2:mem:slow-call-1h-test;DB_CLOSE_DELAY=-1"})
+            "app.logging.slow-call-threshold=1h"})
     class ThresholdOfOneHour {
 
         @Autowired

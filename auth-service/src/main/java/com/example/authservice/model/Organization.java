@@ -8,7 +8,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -24,13 +24,16 @@ public class Organization {
     @GeneratedValue(strategy = GenerationType.AUTO)
     private UUID id;
 
+    @Column(nullable = false, length = 100)
     private String name;
 
+    @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private Plan plan;
 
     private Integer seatLimit;
 
-    private LocalDateTime createdAt;
+    @Column(nullable = false)
+    private Instant createdAt;
 
 }

@@ -1,10 +1,11 @@
 package com.example.authservice.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 
 public record RenameProjectRequest(
         @NotBlank(message = "Project name cannot be blank")
-        @Size(max = 100, message = "Project name must be at most 100 characters long")
+        @VisibleText(message = "Project name cannot be blank")
+        @MaxCodePoints(value = 100, message = "Project name must be at most 100 characters long")
+        @StorableText(trimmed = true, message = "Project name must not contain control characters or invalid Unicode characters")
         String name) {
 }

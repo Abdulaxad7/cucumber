@@ -8,25 +8,23 @@ spring:
   mvc:
     log-resolved-exception: false
   jpa:
-    database: h2
     open-in-view: false
     hibernate:
-      ddl-auto: create
-    defer-datasource-initialization: true
+      ddl-auto: validate
     show-sql: false
     properties:
       hibernate:
-        #        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
   datasource:
-    url: jdbc:h2:mem:authdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    username: admin
-    password: admin
-    driver-class-name: org.h2.Driver
-
-  h2:
-    console:
-      enabled: false
+    url: ${AUTH_DB_URL}
+    username: ${AUTH_DB_USERNAME}
+    password: ${AUTH_DB_PASSWORD}
+    hikari:
+      data-source-properties:
+        # Every connection waits at most 5 s for a lock (PostgreSQL lock_timeout).
+        options: "-c lock_timeout=5s"
+        # Keeps PostgreSQL's error DETAIL, which can contain stored values, out of exception messages.
+        logServerErrorDetail: false
 
 
 

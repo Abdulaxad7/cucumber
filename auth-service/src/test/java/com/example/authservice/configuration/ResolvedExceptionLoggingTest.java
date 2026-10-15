@@ -17,7 +17,6 @@ import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.PropertySource;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -34,12 +33,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * <p>
  * The setting is forced the way devtools applies it: {@code DevToolsPropertyDefaultsPostProcessor} adds a
  * {@code MapPropertySource} named "devtools" with {@code addLast}, so it ranks below {@code application.yaml}. A
- * {@code @TestPropertySource} would rank above {@code application.yaml} and hide the fix. This class has its own
- * context, so it uses its own H2 database.
+ * {@code @TestPropertySource} would rank above {@code application.yaml} and hide the fix.
  */
 @AuthServiceIntegrationTest
 @ContextConfiguration(initializers = ResolvedExceptionLoggingTest.DevToolsPropertyDefaults.class)
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:resolved-exception-logging-test;DB_CLOSE_DELAY=-1")
 @ExtendWith(OutputCaptureExtension.class)
 class ResolvedExceptionLoggingTest {
 

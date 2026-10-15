@@ -17,7 +17,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -148,7 +149,7 @@ class RevokeCeilingTest {
         // Given
         String i = invite(ANA, "fay@example.com", "OWNER");
         Invitation stored = invitationRepository.findById(UUID.fromString(i)).orElseThrow();
-        stored.setExpiresAt(LocalDateTime.now().minusHours(1));
+        stored.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS));
         invitationRepository.save(stored);
 
         // When

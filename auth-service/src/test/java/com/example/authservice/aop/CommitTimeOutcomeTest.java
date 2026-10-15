@@ -20,7 +20,6 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -35,10 +34,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 /**
  * D17 item 1: the aspect wraps the transaction advice, so an exception thrown at commit is the call's outcome. Creating
  * an organization only inserts its row when the transaction flushes at commit; a test-only statement inspector makes
- * that insert fail. This class has its own context, so it uses its own H2 database.
+ * that insert fail.
  */
 @AuthServiceIntegrationTest
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:commit-time-outcome-test;DB_CLOSE_DELAY=-1")
 @ExtendWith(OutputCaptureExtension.class)
 class CommitTimeOutcomeTest {
 

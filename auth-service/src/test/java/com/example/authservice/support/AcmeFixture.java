@@ -6,7 +6,6 @@ import com.example.authservice.enums.UserStatus;
 import com.example.authservice.model.OrgMembership;
 import com.example.authservice.model.Organization;
 import com.example.authservice.model.User;
-import com.example.authservice.repository.AuditLogRepository;
 import com.example.authservice.repository.InvitationRepository;
 import com.example.authservice.repository.OrgMembershipRepository;
 import com.example.authservice.repository.OrganizationRepository;
@@ -16,7 +15,7 @@ import com.example.authservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -39,14 +38,12 @@ public class AcmeFixture {
     private final InvitationRepository invitationRepository;
     private final ProjectMembershipRepository projectMembershipRepository;
     private final ProjectRepository projectRepository;
-    private final AuditLogRepository auditLogRepository;
     private final PasswordEncoder passwordEncoder;
 
     private String passwordHash;
 
     /** Deletes every row, children first. */
     public void reset() {
-        auditLogRepository.deleteAllInBatch();
         invitationRepository.deleteAllInBatch();
         projectMembershipRepository.deleteAllInBatch();
         projectRepository.deleteAllInBatch();
@@ -72,7 +69,7 @@ public class AcmeFixture {
     }
 
     public User user(String email, String fullName) {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         return userRepository.save(User.builder()
                 .email(email)
                 .passwordHash(passwordHash())
@@ -89,7 +86,7 @@ public class AcmeFixture {
                 .name(name)
                 .plan(Plan.FREE)
                 .seatLimit(FREE_SEAT_LIMIT)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build());
     }
 
@@ -98,7 +95,7 @@ public class AcmeFixture {
         membership.setOrganization(organization);
         membership.setUser(user);
         membership.setRole(role);
-        membership.setCreatedAt(LocalDateTime.now());
+        membership.setCreatedAt(Instant.now());
         return orgMembershipRepository.save(membership);
     }
 

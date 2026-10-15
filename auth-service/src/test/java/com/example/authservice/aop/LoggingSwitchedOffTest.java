@@ -24,13 +24,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 /**
- * AC-9.12: with {@code app.logging.enabled=false} the aspect logs nothing, even at DEBUG. This class has its own
- * context, so it uses its own H2 database.
+ * AC-9.12: with {@code app.logging.enabled=false} the aspect logs nothing, even at DEBUG.
  */
 @AuthServiceIntegrationTest
 @TestPropertySource(properties = {
-        "app.logging.enabled=false",
-        "spring.datasource.url=jdbc:h2:mem:logging-switched-off-test;DB_CLOSE_DELAY=-1"})
+        "app.logging.enabled=false"})
 @ExtendWith(OutputCaptureExtension.class)
 class LoggingSwitchedOffTest {
 

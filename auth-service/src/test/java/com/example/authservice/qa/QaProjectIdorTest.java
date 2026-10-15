@@ -29,7 +29,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -255,7 +255,7 @@ class QaProjectIdorTest {
         assertThat(JsonPath.<String>read(json, "$.myRole")).isEqualTo("ADMIN");
         Project stored = projectRepository.findById(id).orElseThrow();
         assertThat(stored.getOrganization().getId()).isEqualTo(acme);
-        assertThat(stored.getCreatedAt()).isAfter(LocalDateTime.now().minusMinutes(5));
+        assertThat(stored.getCreatedAt()).isAfter(Instant.now().minus(5, ChronoUnit.MINUTES));
         assertThat(projectRepository.findByOrganizationId(projects.initech())).hasSize(1);
     }
 

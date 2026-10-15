@@ -6,13 +6,13 @@
 Project cucumber {
   database_type: 'PostgreSQL'
   Note: '''
-  **As-built at 2026-10-12** (branch staging, HEAD 32eee07 plus the uncommitted auth-service phase 1 work, Batches A–C, review point C; no file under model/ was modified, and the Hibernate DDL was checked against this file). backend-swe keeps this in sync.
+  **As-built at 2026-10-15** (branch staging, auth-service-persistence review point C: Flyway V1 to V7 on PostgreSQL 17; V1 equals Hibernate's PostgreSQL DDL for the original entities). Type notes give the PostgreSQL DDL of the applied migrations. backend-swe keeps this in sync.
 
   **Conventions (all services)**
   - Primary keys: `id uuid`. auth-service generates them in the application (`@GeneratedValue(strategy = AUTO)` on a UUID field).
   - Names: snake_case tables and columns. Hibernate default naming turns camelCase fields into snake_case, so `seatLimit` becomes `seat_limit`.
-  - Timestamps: `created_at` on every table, and `updated_at` on every mutable table. Immutable rows (history, attachments) have only `created_at`. As-built auth-service uses `LocalDateTime`, which maps to `timestamp(6)` without a zone. Proposed tables use `timestamptz` in UTC, matching the planned move to Instant (auth-service phase 4).
-  - Enums are stored as strings (`@Enumerated(EnumType.STRING)`) and modelled as DBML Enums. Values are UPPER_SNAKE_CASE like the Java constants. An API may present execution statuses in lower case (passed, failed, ...), which is a contract decision, not a storage one.
+  - Timestamps: `created_at` on every table, and `updated_at` on every mutable table. Immutable rows (history, attachments) have only `created_at`. All services use `Instant` stored as `timestamptz` in UTC; as-built in auth-service since V2.
+  - Enums are stored as strings (`@Enumerated(EnumType.STRING)`) in `varchar(32)` plus a named `CHECK ck_<table>_<column>_values` (ERD-D12). auth-service has this as-built (V4) and has no DBML Enums; each column's note lists its values. The proposed services keep DBML Enums for readability. Values are UPPER_SNAKE_CASE like the Java constants. An API may present execution statuses in lower case (passed, failed, ...), which is a contract decision, not a storage one.
   - Each service owns its own database. **There are no cross-service foreign keys.** A column that points into another service is a plain uuid with a note "references <service>.<table>.id (by ID, no FK)".
   - Within one service, relations are real foreign keys (Ref).
 
@@ -21,11 +21,10 @@ Project cucumber {
   - Table note starts with "proposed — approved design (2026-10-12), not yet implemented": a domain design by pm, approved by the user on 2026-10-12 (ERD-D1..D11). Nothing is built yet.
   - "proposed (auth-service phase 1)" would mark an entity change planned by docs/specs/auth-service.md but not yet in code. **Phase 1 plans none**: its "Will not be touched" list includes every entity in model/. Phase 1 only changes the values written (lower-cased emails, plan FREE, seat_limit 5), and those are noted on the columns.
   - "proposed (auth-service-projects)" marked the entity changes of docs/specs/auth-service-projects.md (E31, E36, E37) and its project rules. All of them are implemented (Batches A2, B and C, 2026-10-13), so no auth_service line carries the marker any more.
-  - "proposed (auth-service-persistence)" marks a change of the auth_service group planned by docs/specs/auth-service-persistence.md (Ready, approved by the user 2026-10-14): PostgreSQL 17 with Flyway, timestamptz/Instant, NOT NULL and lengths, enums as varchar(32) plus a named CHECK (the DBML Enums above stay until then, because the H2 columns are native enums), lower-case email checks, a unique (org_id, lower(name)) index on projects, foreign-key indexes, named foreign keys with ON DELETE RESTRICT, and audit_log dropped. As-built lines are kept, with a note saying what will change. backend-swe updates each line and drops the marker when its E-item lands (spec T3 to T10).
+  - "proposed (auth-service-persistence)" marks a change of the auth_service group planned by docs/specs/auth-service-persistence.md (Ready, approved by the user 2026-10-14). **All of it is as-built since review point C (2026-10-15), V1 to V7:** PostgreSQL 17 with Flyway; timestamptz/Instant (V2); NOT NULL and lengths (V3); enums as varchar(32) plus named CHECKs, with no auth-service DBML Enums (V4); lower-case email checks and the unique (org_id, lower(name COLLATE "und-x-icu")) index on projects (V5); foreign-key indexes and ON DELETE RESTRICT (V6); audit_log dropped (V7). Any marker still left on an auth_service line is stale.
   - "proposed (scenario-service)" marks a refinement of the scenario_service design by docs/specs/scenario-service.md (Ready, approved by the user on 2026-10-14). It applies on top of the 2026-10-12 design: jsonb instead of json, names as text, path uniqueness among active features only, tag_assignments.feature_id, enums stored as varchar(32) plus CHECK (ERD-D12), named constraints and delete rules per the database pattern (spec D14), and the id-stability and content rules (spec D8 to D12). The DBML Enums of scenario_service stay for readability; the real columns are varchar(32) with a CHECK, as noted on each column. backend-swe turns the scenario_service tables into as-built when its Flyway V1 migration and entities land (spec T2, T7).
 
-  **Runtime database today:** H2 in-memory, schema generated by Hibernate (`ddl-auto: create`). There are no migrations. PostgreSQL plus Flyway is auth-service phase 4. Type notes below say where H2 and PostgreSQL DDL differ.
-  proposed (auth-service-persistence): auth-service moves to PostgreSQL 17, database auth_service (UTF-8, locale provider builtin, C.UTF-8), schema from Flyway migrations V1 (the current entities exactly) to V7, ddl-auto validate. flyway_schema_history is managed by Flyway and not modelled here. Shared conventions for all services: spec section "Database pattern for every service".
+  **Runtime database today (as-built 2026-10-15):** PostgreSQL 17, database auth_service (UTF-8, locale provider builtin, C.UTF-8), schema from Flyway migrations V1 to V7, ddl-auto validate. Tests use a postgres:17 Testcontainers container. H2 is removed. flyway_schema_history is managed by Flyway and not modelled here. Shared conventions for all services: spec section "Database pattern for every service".
   scenario-service starts directly on PostgreSQL 17 (database scenario_service, builtin C.UTF-8) with Flyway migrations and `ddl-auto: validate`, following the same "Database pattern for every service" (docs/specs/scenario-service.md D14); it never uses H2.
   '''
 }
@@ -34,58 +33,25 @@ Project cucumber {
 // AS-BUILT: auth-service (com.example.authservice.model, enums)
 // =====================================================================
 
-Enum user_status {
-  ACTIVE
-  SUSPENDED
-  PENDING_VERIFICATION [note: 'set by register and by anonymous invitation acceptance. Phase 1 (D4): may log in; only SUSPENDED is blocked.']
-}
-
-Enum plan {
-  FREE [note: 'set by createOrganization; the only plan written in phase 1']
-  TEAM
-  ENTERPRISE
-}
-
-Enum organization_role {
-  OWNER [note: 'rank 4 (rank is Java-only via isAtLeast, not stored)']
-  ADMIN [note: 'rank 3']
-  MEMBER [note: 'rank 2']
-  READER [note: 'rank 1']
-}
-
-Enum project_role {
-  ADMIN [note: 'rank 4 (rank is Java-only via isAtLeast, not stored)']
-  MEMBER [note: 'rank 3']
-  TESTER [note: 'rank 2']
-  READER [note: 'rank 1']
-}
-
-Enum invitation_status {
-  PENDING
-  ACCEPTED
-  REVOKED
-  EXPIRED [note: 'never written by code today; expiry is computed from expires_at, so a stored PENDING may already be expired (spec glossary)']
-}
-
 Table users [headercolor: #2D6A9F] {
   id uuid [pk, not null]
-  email varchar(255) [unique, not null, note: 'unique is case-sensitive in the DB. The application trims and lower-cases emails before storing and comparing them (D12), and the API limits them to 254 characters (E17). proposed (auth-service-persistence): varchar(254), unique uk_users_email kept, plus CHECK ck_users_email_lower_case (email = lower(email)) (E70, E72).']
-  password_hash varchar(255) [null, note: 'explicitly nullable (@Column(nullable = true)); BCrypt hash. proposed (auth-service-persistence): unchanged, stays nullable (D8).']
-  full_name varchar(255) [null, note: 'no @Column: nullable, default length 255. The API limits it to 100 characters (E17). proposed (auth-service-persistence): varchar(100) not null; no control characters, lone surrogates or Unicode-blank values (E70, D11).']
-  status user_status [null, note: 'EnumType.STRING, nullable. H2 DDL: native enum(...); PostgreSQL DDL: varchar(255) plus a check constraint. proposed (auth-service-persistence): varchar(32) not null, CHECK ck_users_status_values (E70, E71).']
+  email varchar(254) [unique, not null, note: 'unique uk_users_email (V1); varchar(254) since V3 (E70), the API limit (E17). The application trims and lower-cases emails before storing and comparing them (D12). CHECK ck_users_email_lower_case (email = lower(email)) since V5 (E72), so the unique constraint is case-insensitive uniqueness.']
+  password_hash varchar(255) [null, note: 'explicitly nullable (@Column(nullable = true)); BCrypt hash. Deliberately nullable, for future accounts without a password (auth-service-persistence D8).']
+  full_name varchar(100) [not null, note: 'varchar(100) not null since V3 (E70), mirrored by @Column(nullable = false, length = 100); the API limit (E17). The API rejects control characters and lone surrogates (D11 rule T1).']
+  status varchar(32) [not null, note: 'enum UserStatus, EnumType.STRING; varchar(32) since V4 (E71), not null since V3 (E70). CHECK ck_users_status_values (V1): ACTIVE, SUSPENDED, PENDING_VERIFICATION. PENDING_VERIFICATION is set by register and by anonymous invitation acceptance; phase 1 (D4): it may log in, only SUSPENDED is blocked.']
   mfa_enabled boolean [not null, note: 'primitive boolean, so Hibernate adds NOT NULL; no DB default']
-  created_at timestamp(6) [null, note: 'set by application code, no @CreationTimestamp. proposed (auth-service-persistence): timestamptz not null, set from the service clock (E69, E70).']
-  updated_at timestamp(6) [null, note: 'set once at register; nothing updates it later. proposed (auth-service-persistence): timestamptz not null (E69, E70).']
+  created_at timestamptz [not null, note: 'set by application code from the service clock (Instant, UTC; V2, E69), no @CreationTimestamp; not null since V3 (E70).']
+  updated_at timestamptz [not null, note: 'set once at register from the service clock (V2, E69); nothing updates it later; not null since V3 (E70).']
 
   Note: 'as-built (entity User, @Table users)'
 }
 
 Table organizations [headercolor: #2D6A9F] {
   id uuid [pk, not null]
-  name varchar(255) [null, note: 'no @Column: nullable, length 255 in the DB. The API limits it to 1-100 non-blank characters (E17); duplicates are allowed. proposed (auth-service-persistence): varchar(100) not null, stored as sent (E70).']
-  plan plan [null, note: 'EnumType.STRING, nullable. proposed (auth-service-persistence): varchar(32) not null, CHECK ck_organizations_plan_values (E70, E71).']
-  seat_limit int [null, note: 'Integer; null means unlimited (spec glossary). createOrganization sets app.orgs.free-seat-limit (default 5). Seats used = members + PENDING invitations not yet expired (D11). proposed (auth-service-persistence): CHECK ck_organizations_seat_limit_positive (seat_limit IS NULL OR seat_limit > 0) (E70).']
-  created_at timestamp(6) [null, note: 'proposed (auth-service-persistence): timestamptz not null (E69, E70).']
+  name varchar(100) [not null, note: 'varchar(100) not null since V3 (E70), mirrored by @Column(nullable = false, length = 100). The API limits it to 1-100 non-blank characters (E17); stored as sent; duplicates are allowed.']
+  plan varchar(32) [not null, note: 'enum Plan, EnumType.STRING; varchar(32) since V4 (E71), not null since V3 (E70). CHECK ck_organizations_plan_values (V1): FREE, TEAM, ENTERPRISE. createOrganization sets FREE, the only plan written so far.']
+  seat_limit int [null, note: 'Integer; null means unlimited (spec glossary). createOrganization sets app.orgs.free-seat-limit (default 5). Seats used = members + PENDING invitations not yet expired (D11). CHECK ck_organizations_seat_limit_positive (seat_limit IS NULL OR seat_limit > 0) since V3 (E70).']
+  created_at timestamptz [not null, note: 'set from the service clock (timestamptz since V2, E69); not null since V3 (E70).']
 
   Note: 'as-built (entity Organization, @Table organizations). No updated_at column. Invitations, acceptances, role changes and removals lock this row (SELECT ... FOR UPDATE) so the seat limit and the last-owner rule hold under concurrent requests.'
 }
@@ -94,12 +60,12 @@ Table org_memberships [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   user_id uuid [not null]
   org_id uuid [not null]
-  role organization_role [null, note: 'EnumType.STRING, nullable in the DB although every membership needs a role. proposed (auth-service-persistence): varchar(32) not null, CHECK ck_org_memberships_role_values (E70, E71).']
-  created_at timestamp(6) [null, note: 'proposed (auth-service-persistence): timestamptz not null (E69, E70).']
+  role varchar(32) [not null, note: 'enum OrganizationRole, EnumType.STRING; varchar(32) since V4 (E71), not null since V3 (E70). CHECK ck_org_memberships_role_values (V1): OWNER, ADMIN, MEMBER, READER (ranks 4 to 1, Java-only via isAtLeast, not stored).']
+  created_at timestamptz [not null, note: 'set from the service clock (timestamptz since V2, E69); not null since V3 (E70).']
 
   indexes {
-    (user_id, org_id) [unique, note: 'proposed (auth-service-persistence): named uk_org_memberships_user_id_org_id']
-    org_id [name: 'ix_org_memberships_org_id', note: 'proposed (auth-service-persistence): foreign-key index (E73)']
+    (user_id, org_id) [unique, name: 'uk_org_memberships_user_id_org_id', note: 'as-built (V1): unique constraint']
+    org_id [name: 'ix_org_memberships_org_id', note: 'as-built (V6, E73): foreign-key index']
   }
   Note: 'as-built (entity OrgMembership). Exactly one role per user and organization. created_at is joinedAt in the member list. Rows are deleted when a member is removed or leaves.'
 }
@@ -107,12 +73,12 @@ Table org_memberships [headercolor: #2D6A9F] {
 Table projects [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   org_id uuid [not null]
-  name varchar(255) [null, note: 'nullable, no uniqueness in the DB. The API (T11) limits it to 1-100 non-blank characters as sent (counted before trimming), stores it trimmed, and keeps it unique per organization (trimmed, lower-cased with Locale.ROOT, archived projects included) in the application, under the organization row lock. A DB unique index on (org_id, lower(name)) and NOT NULL come with phase 4. proposed (auth-service-persistence): varchar(100) not null (E70) and the unique index uk_projects_org_id_name_lower (E72).']
-  created_at timestamp(6) [null, note: 'proposed (auth-service-persistence): timestamptz not null (E69, E70).']
-  archived_at timestamp(6) [null, note: 'set when the project is archived, null when active (E31, D5). Archived projects stay readable but are read-only; there is no hard delete. Becomes timestamptz in phase 4. proposed (auth-service-persistence): timestamptz, null (E69).']
+  name varchar(100) [not null, note: 'unique per organization ignoring case, archived projects included: index uk_projects_org_id_name_lower (V5, E72). The API (T11) limits it to 1-100 non-blank characters as sent (counted before trimming), stores it trimmed, and keeps it unique per organization (trimmed, lower-cased with Locale.ROOT, archived projects included) in the application, under the organization row lock. varchar(100) not null since V3 (E70), mirrored by @Column(nullable = false, length = 100).']
+  created_at timestamptz [not null, note: 'set from the service clock (timestamptz since V2, E69); not null since V3 (E70).']
+  archived_at timestamptz [null, note: 'set from the service clock when the project is archived, null when active (E31, D5; timestamptz since V2, E69). Archived projects stay readable but are read-only; there is no hard delete.']
 
   indexes {
-    (org_id, `lower(name)`) [unique, name: 'uk_projects_org_id_name_lower', note: 'proposed (auth-service-persistence): archived projects included (E72). The application check under the organization lock stays the primary rule (PROJECT_NAME_TAKEN). Also serves as the index for the org_id foreign key.']
+    (org_id, `lower(name COLLATE "und-x-icu")`) [unique, name: 'uk_projects_org_id_name_lower', note: 'as-built (V5, E72): archived projects included. ICU lower() matches Java toLowerCase(Locale.ROOT); the builtin C.UTF-8 lower() does not for U+0130 (decided 2026-10-15). The application check under the organization lock stays the primary rule (PROJECT_NAME_TAKEN). Also serves as the index for the org_id foreign key.']
   }
 
   Note: '''
@@ -126,12 +92,12 @@ Table project_memberships [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   user_id uuid [not null]
   project_id uuid [not null]
-  role project_role [null, note: 'EnumType.STRING, nullable. proposed (auth-service-persistence): varchar(32) not null, CHECK ck_project_memberships_role_values (E70, E71).']
-  created_at timestamp(6) [null, note: 'proposed (auth-service-persistence): timestamptz not null (E69, E70).']
+  role varchar(32) [not null, note: 'enum ProjectRole, EnumType.STRING; varchar(32) since V4 (E71), not null since V3 (E70). CHECK ck_project_memberships_role_values (V1): ADMIN, MEMBER, TESTER, READER (ranks 4 to 1, Java-only via isAtLeast, not stored).']
+  created_at timestamptz [not null, note: 'set from the service clock (timestamptz since V2, E69); not null since V3 (E70).']
 
   indexes {
-    (user_id, project_id) [unique, note: 'proposed (auth-service-persistence): named uk_project_memberships_user_id_project_id']
-    project_id [name: 'ix_project_memberships_project_id', note: 'proposed (auth-service-persistence): foreign-key index (E73)']
+    (user_id, project_id) [unique, name: 'uk_project_memberships_user_id_project_id', note: 'as-built (V1): unique constraint']
+    project_id [name: 'ix_project_memberships_project_id', note: 'as-built (V6, E73): foreign-key index']
   }
   Note: '''
   as-built (entity ProjectMembership). Read by the effective-role resolver (ProjectRoleService, D3): organization OWNER and ADMIN are implicit project ADMIN without a row, and an organization READER row counts as at most READER.
@@ -141,53 +107,36 @@ Table project_memberships [headercolor: #2D6A9F] {
 
 Table invitations [headercolor: #2D6A9F] {
   id uuid [pk, not null]
-  email varchar(255) [null, note: 'nullable, case-sensitive in the DB. The application trims and lower-cases it (D12). proposed (auth-service-persistence): varchar(254) not null, CHECK ck_invitations_email_lower_case (E70, E72).']
+  email varchar(254) [not null, note: 'varchar(254) not null since V3 (E70); lower case guaranteed by CHECK ck_invitations_email_lower_case (email = lower(email)) since V5 (E72). The application trims and lower-cases it (D12).']
   org_id uuid [not null, note: 'required (join column nullable = false, E36): invitations are for organizations only (D7).']
-  role organization_role [null, note: 'EnumType.STRING, nullable (E37, D7): an organization role only; stored values (OWNER, ADMIN, MEMBER, READER) are unchanged. On H2 an ENUM column; the PostgreSQL check or enum type comes with phase 4. proposed (auth-service-persistence): varchar(32) not null, CHECK ck_invitations_role_values (E70, E71).']
+  role varchar(32) [not null, note: 'enum OrganizationRole, EnumType.STRING (E37, D7): an organization role only. varchar(32) since V4 (E71), not null since V3 (E70). CHECK ck_invitations_role_values (V1): OWNER, ADMIN, MEMBER, READER.']
   invited_by uuid [not null]
-  token varchar(255) [unique, null, note: 'unique but nullable; acceptance token (24 random bytes, 32 URL-safe characters), stored in plain text. Returned once, in the create-invitation response. proposed (auth-service-persistence): not null, unique uk_invitations_token (E70).']
-  status invitation_status [null, note: 'EnumType.STRING, nullable. Written: PENDING on create, ACCEPTED on accept, REVOKED on revoke. proposed (auth-service-persistence): varchar(32) not null, CHECK ck_invitations_status_values (E70, E71).']
-  expires_at timestamp(6) [null, note: 'created_at + 7 days, set by the application. proposed (auth-service-persistence): timestamptz not null, from the service clock (E69, E70).']
-  created_at timestamp(6) [null, note: 'proposed (auth-service-persistence): timestamptz not null (E69, E70).']
+  token varchar(255) [unique, not null, note: 'unique uk_invitations_token (V1), not null since V3 (E70); acceptance token (24 random bytes, 32 URL-safe characters), stored in plain text. Returned once, in the create-invitation response.']
+  status varchar(32) [not null, note: 'enum InvitationStatus, EnumType.STRING; varchar(32) since V4 (E71), not null since V3 (E70). CHECK ck_invitations_status_values (V1): PENDING, ACCEPTED, REVOKED, EXPIRED. Written: PENDING on create, ACCEPTED on accept, REVOKED on revoke. EXPIRED is never written; expiry is computed from expires_at, so a stored PENDING may already be expired (spec glossary).']
+  expires_at timestamptz [not null, note: 'created_at + 7 days, set by the application from the service clock (V2, E69); not null since V3 (E70).']
+  created_at timestamptz [not null, note: 'set from the service clock (timestamptz since V2, E69); not null since V3 (E70).']
 
   indexes {
-    (org_id, email) [name: 'ix_invitations_org_id_email', note: 'proposed (auth-service-persistence): foreign-key index for org_id, also used by the pending-invitation lookups (E73)']
-    invited_by [name: 'ix_invitations_invited_by', note: 'proposed (auth-service-persistence): foreign-key index (E73)']
+    (org_id, email) [name: 'ix_invitations_org_id_email', note: 'as-built (V6, E73): foreign-key index for org_id, also used by the pending-invitation lookups']
+    invited_by [name: 'ix_invitations_invited_by', note: 'as-built (V6, E73): foreign-key index']
   }
 
   Note: '''
   as-built (entity Invitation). Organization-only since E36 (D7): the project_id column, its foreign key and the project branch of the accept flow were removed. There are no project invitations; project members are added directly from the organization (D6).
-  "One pending, unexpired invitation per organization and email" (D11) is enforced only in the application, not by a DB constraint. proposed (auth-service-persistence): it stays application-only, because "pending" depends on expires_at > now(), which a partial index can't express (spec D8 item 7).
+  "One pending, unexpired invitation per organization and email" (D11) is enforced only in the application, not by a DB constraint. It stays application-only (auth-service-persistence D8 item 7), because "pending" depends on expires_at > now(), which a partial index can't express (spec D8 item 7).
   Accepting locks the row (SELECT ... FOR UPDATE) before any user or membership is written, so a token is single use (Q5).
   '''
 }
 
-Table audit_log [headercolor: #2D6A9F] {
-  id uuid [pk, not null]
-  actor_id uuid [not null]
-  action varchar(255) [null, note: 'free text, no enum of actions']
-  org_id uuid [null]
-  project_id uuid [null]
-  target_user_id uuid [null]
-  metadata json [null, note: 'String field with columnDefinition json. Risk: PostgreSQL rejects a varchar bound to a json column without a cast or @JdbcTypeCode(SqlTypes.JSON), and H2 stores it as a JSON string literal (double-encoded).']
-  created_at timestamp(6) [null]
-
-  Note: 'as-built (entity AuditLog, @Table audit_log, singular unlike the other tables). No accessors and no writer. Audit writing was deferred to phase 2 (phase-1 D8); docs/specs/auth-service-projects.md D11 proposes deferring it again, to its own spec auth-service-audit, which must first fix the metadata mapping. proposed (auth-service-persistence): this table, its four foreign keys, the entity and AuditLogRepository are dropped by V7 (E74, option B, approved 2026-10-14). auth-service-audit creates audit_logs (plural) with metadata jsonb in its own migration.'
-}
-
-// proposed (auth-service-persistence): every auth_service foreign key is recreated as fk_<table>_<column> with ON DELETE RESTRICT (E73, spec D8 item 9).
-// The [delete: restrict] marks are added when V6 lands; the audit_log Refs go with the table (E74).
-Ref: org_memberships.user_id > users.id
-Ref: org_memberships.org_id > organizations.id
-Ref: projects.org_id > organizations.id
-Ref: project_memberships.user_id > users.id
-Ref: project_memberships.project_id > projects.id
-Ref: invitations.org_id > organizations.id
-Ref: invitations.invited_by > users.id
-Ref: audit_log.actor_id > users.id // proposed (auth-service-persistence): dropped with audit_log (E74)
-Ref: audit_log.org_id > organizations.id // proposed (auth-service-persistence): dropped with audit_log (E74)
-Ref: audit_log.project_id > projects.id // proposed (auth-service-persistence): dropped with audit_log (E74)
-Ref: audit_log.target_user_id > users.id // proposed (auth-service-persistence): dropped with audit_log (E74)
+// As-built: every auth_service foreign key is named fk_<table>_<column> (V1) and restricts deletes (ON DELETE RESTRICT since V6, E73, spec D8 item 9).
+// audit_log and its four foreign keys were dropped by V7 (E74, option B); auth-service-audit creates audit_logs later.
+Ref: org_memberships.user_id > users.id [delete: restrict]
+Ref: org_memberships.org_id > organizations.id [delete: restrict]
+Ref: projects.org_id > organizations.id [delete: restrict]
+Ref: project_memberships.user_id > users.id [delete: restrict]
+Ref: project_memberships.project_id > projects.id [delete: restrict]
+Ref: invitations.org_id > organizations.id [delete: restrict]
+Ref: invitations.invited_by > users.id [delete: restrict]
 
 TableGroup auth_service {
   users
@@ -196,7 +145,6 @@ TableGroup auth_service {
   projects
   project_memberships
   invitations
-  audit_log
 }
 
 // =====================================================================

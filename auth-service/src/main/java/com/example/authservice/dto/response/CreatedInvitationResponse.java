@@ -3,7 +3,7 @@ package com.example.authservice.dto.response;
 import com.example.authservice.enums.InvitationStatus;
 import com.example.authservice.enums.OrganizationRole;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record CreatedInvitationResponse(
@@ -11,8 +11,8 @@ public record CreatedInvitationResponse(
         String email,
         OrganizationRole role,
         InvitationStatus status,
-        LocalDateTime createdAt,
-        LocalDateTime expiresAt,
+        Instant createdAt,
+        Instant expiresAt,
         String token
 ) {
 

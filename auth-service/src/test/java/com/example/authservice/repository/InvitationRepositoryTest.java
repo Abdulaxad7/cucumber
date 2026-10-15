@@ -6,6 +6,7 @@ import com.example.authservice.enums.UserStatus;
 import com.example.authservice.model.Invitation;
 import com.example.authservice.model.Organization;
 import com.example.authservice.model.User;
+import com.example.authservice.support.UsesEmptyTestDatabase;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,7 +14,8 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,9 +26,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@code project_id} column.
  */
 @DataJpaTest
+@UsesEmptyTestDatabase
 class InvitationRepositoryTest {
 
-    private static final LocalDateTime CREATED_AT = LocalDateTime.of(2026, 10, 13, 9, 30, 0);
+    private static final Instant CREATED_AT = Instant.parse("2026-10-13T09:30:00Z");
 
     @Autowired
     private InvitationRepository invitationRepository;
@@ -84,7 +87,7 @@ class InvitationRepositoryTest {
     private Invitation invitation(Organization organization, String token) {
         User ben = userRepository.save(User.builder()
                 .email(token + "@example.com").passwordHash("hash").fullName("Ben Ode")
-                .status(UserStatus.ACTIVE).createdAt(CREATED_AT).build());
+                .status(UserStatus.ACTIVE).createdAt(CREATED_AT).updatedAt(CREATED_AT).build());
         return Invitation.builder()
                 .email("fay@example.com")
                 .organization(organization)
@@ -93,7 +96,7 @@ class InvitationRepositoryTest {
                 .token(token)
                 .status(InvitationStatus.PENDING)
                 .createdAt(CREATED_AT)
-                .expiresAt(CREATED_AT.plusDays(7))
+                .expiresAt(CREATED_AT.plus(7, ChronoUnit.DAYS))
                 .build();
     }
 }

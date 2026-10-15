@@ -2,7 +2,7 @@ package com.example.authservice.dto.response;
 
 import com.example.authservice.enums.UserStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 public record UserResponse(
@@ -11,6 +11,6 @@ public record UserResponse(
         String fullName,
         UserStatus status,
         boolean mfaEnabled,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {
 }

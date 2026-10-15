@@ -8,6 +8,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.example.authservice.support.TestDatabase.POSTGRES;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -20,10 +21,12 @@ class OrganizationPropertiesStartupTest {
     void theServiceRefusesToStartWithANonPositiveFreeSeatLimit() {
         // When
         Throwable failure = catchThrowable(() -> new SpringApplicationBuilder(AuthServiceApplication.class)
-                // Port 0 keeps 8081 free; the failed context gets its own in-memory database (G3 rule).
+                // Port 0 keeps 8081 free; the context gets the test database's connection settings.
                 .run("--server.port=0", "--spring.profiles.active=", "--app.jwtSecret=" + TestJwt.SECRET,
                         "--app.orgs.free-seat-limit=0",
-                        "--spring.datasource.url=jdbc:h2:mem:organization-properties-startup-test")
+                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                        "--spring.datasource.username=" + POSTGRES.getUsername(),
+                        "--spring.datasource.password=" + POSTGRES.getPassword())
                 .close());
 
         // Then

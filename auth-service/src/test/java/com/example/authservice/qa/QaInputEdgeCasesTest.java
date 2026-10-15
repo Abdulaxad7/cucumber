@@ -24,7 +24,6 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.util.List;
-import java.util.Map;
 
 import static com.example.authservice.qa.QaSupport.as;
 import static com.example.authservice.qa.QaSupport.json;
@@ -333,14 +332,12 @@ class QaInputEdgeCasesTest {
 
     @Test
     @Tag("AC-1.1")
-    @DisplayName("qa: a JSON number where the email string belongs is a validation error on email")
-    void aNumberForTheEmailIsAValidationError() throws Exception {
+    @DisplayName("qa: a JSON number where the email string belongs is a malformed request")
+    void aNumberForTheEmailIsMalformed() throws Exception {
         MvcResult result = mockMvc.perform(json(post(REGISTER),
                 "{\"email\":123,\"password\":\"Secret123!\",\"fullName\":\"Zed\"}")).andReturn();
 
-        DocumentContext problem = assertProblem(result, 400, "VALIDATION_FAILED", REGISTER);
-        List<Map<String, String>> errors = problem.read("$.errors");
-        assertThat(errors).extracting(error -> error.get("field")).containsExactly("email");
+        assertProblem(result, 400, "MALFORMED_REQUEST", REGISTER);
     }
 
     private static String character(String unit) {

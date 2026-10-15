@@ -28,7 +28,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -96,8 +97,8 @@ class InvitationsTest {
         assertThat(body.read("$.email", String.class)).isEqualTo(FAY);
         assertThat(body.read("$.role", String.class)).isEqualTo("MEMBER");
         assertThat(body.read("$.status", String.class)).isEqualTo("PENDING");
-        LocalDateTime createdAt = LocalDateTime.parse(body.read("$.createdAt", String.class));
-        LocalDateTime expiresAt = LocalDateTime.parse(body.read("$.expiresAt", String.class));
+        Instant createdAt = Instant.parse(body.read("$.createdAt", String.class));
+        Instant expiresAt = Instant.parse(body.read("$.expiresAt", String.class));
         assertThat(Duration.between(createdAt, expiresAt)).isEqualTo(Duration.ofDays(7));
         String token = body.read("$.token", String.class);
         assertThat(token).hasSizeGreaterThanOrEqualTo(32).matches("^[A-Za-z0-9_-]+$");
@@ -153,7 +154,7 @@ class InvitationsTest {
     void anExpiredInvitationFreesItsSeat() throws Exception {
         // Given
         seedInvitation("old@example.com", OrganizationRole.MEMBER, InvitationStatus.PENDING,
-                LocalDateTime.now().minusHours(1), "inv-old-QA");
+                Instant.now().minus(1, ChronoUnit.HOURS), "inv-old-QA");
 
         // When
         MvcResult result = invite(BEN, "{\"email\":\"fay@example.com\",\"role\":\"MEMBER\"}");
@@ -214,7 +215,7 @@ class InvitationsTest {
         assertThat(invite(BEN, "{\"email\":\"fay@example.com\",\"role\":\"MEMBER\"}").getResponse().getStatus())
                 .isEqualTo(201);
         seedInvitation("old@example.com", OrganizationRole.MEMBER, InvitationStatus.PENDING,
-                LocalDateTime.now().minusHours(1), "inv-old-QA");
+                Instant.now().minus(1, ChronoUnit.HOURS), "inv-old-QA");
 
         // When
         MvcResult result = list(actor + "@example.com");
@@ -273,7 +274,7 @@ class InvitationsTest {
         Organization initech = fixture.organization("Initech QA");
         fixture.member(initech, acme.eve(), OrganizationRole.OWNER);
         Invitation j = seedInvitation(initech, acme.eve(), "gus@example.com", OrganizationRole.MEMBER,
-                InvitationStatus.PENDING, LocalDateTime.now().plusDays(7), "inv-initech-QA");
+                InvitationStatus.PENDING, Instant.now().plus(7, ChronoUnit.DAYS), "inv-initech-QA");
         String id = switch (target) {
             case "I" -> i;
             case "J" -> j.getId().toString();
@@ -311,7 +312,7 @@ class InvitationsTest {
     void revokingAnExpiredPendingInvitationSucceeds() throws Exception {
         // Given
         Invitation expired = seedInvitation("old@example.com", OrganizationRole.MEMBER, InvitationStatus.PENDING,
-                LocalDateTime.now().minusHours(1), "inv-old-QA");
+                Instant.now().minus(1, ChronoUnit.HOURS), "inv-old-QA");
 
         // When
         MvcResult result = revoke(BEN, expired.getId().toString());
@@ -334,7 +335,7 @@ class InvitationsTest {
     void alreadyMemberComesBeforeInvitationPending() throws Exception {
         // Given a pending invitation for an address that also belongs to a member
         seedInvitation("cai@example.com", OrganizationRole.ADMIN, InvitationStatus.PENDING,
-                LocalDateTime.now().plusDays(7), "inv-cai-QA");
+                Instant.now().plus(7, ChronoUnit.DAYS), "inv-cai-QA");
 
         // Then
         assertProblem(invite(BEN, "{\"email\":\"cai@example.com\",\"role\":\"ADMIN\"}"), 409, "ALREADY_MEMBER",
@@ -445,13 +446,13 @@ class InvitationsTest {
     }
 
     private Invitation seedInvitation(String email, OrganizationRole role, InvitationStatus status,
-                                      LocalDateTime expiresAt, String token) {
+                                      Instant expiresAt, String token) {
         Organization acmeOrg = organizationRepository.findById(acme.orgId()).orElseThrow();
         return seedInvitation(acmeOrg, acme.ben(), email, role, status, expiresAt, token);
     }
 
     private Invitation seedInvitation(Organization organization, User invitedBy, String email, OrganizationRole role,
-                                      InvitationStatus status, LocalDateTime expiresAt, String token) {
+                                      InvitationStatus status, Instant expiresAt, String token) {
         return invitationRepository.save(Invitation.builder()
                 .email(email)
                 .organization(organization)
@@ -459,7 +460,7 @@ class InvitationsTest {
                 .invitedBy(invitedBy)
                 .token(token)
                 .status(status)
-                .createdAt(expiresAt.minusDays(7))
+                .createdAt(expiresAt.minus(7, ChronoUnit.DAYS))
                 .expiresAt(expiresAt)
                 .build());
     }

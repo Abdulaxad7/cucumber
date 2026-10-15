@@ -38,7 +38,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -57,11 +59,12 @@ public class OrganizationServiceImpl implements OrganizationService {
     private final TokenGenerator tokenGenerator;
     private final OrganizationProperties organizationProperties;
     private final ProjectMembershipRepository projectMembershipRepository;
+    private final Clock clock;
 
     @Override
     @Transactional
     public OrganizationResponse createOrganization(CreateOrganizationRequest request, UUID ownerId) {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now(clock);
         Organization org = new Organization();
         org.setName(request.name());
         org.setPlan(Plan.FREE);
@@ -105,7 +108,7 @@ public class OrganizationServiceImpl implements OrganizationService {
             throw new OrgRoleCeilingException(ROLE_CEILING_DETAIL);
         }
         String email = EmailNormalizer.normalize(request.email());
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now(clock);
         if (orgMembershipRepository.existsByOrganizationIdAndUserEmail(orgId, email)) {
             throw new AlreadyMemberException();
         }
@@ -124,7 +127,7 @@ public class OrganizationServiceImpl implements OrganizationService {
                 .invitedBy(userRepository.getReferenceById(inviterId))
                 .token(tokenGenerator.generateNewToken())
                 .status(InvitationStatus.PENDING)
-                .expiresAt(now.plusDays(INVITATION_VALIDITY_DAYS))
+                .expiresAt(now.plus(INVITATION_VALIDITY_DAYS, ChronoUnit.DAYS))
                 .createdAt(now)
                 .build());
 
@@ -137,7 +140,7 @@ public class OrganizationServiceImpl implements OrganizationService {
     @Transactional(readOnly = true)
     public List<InvitationResponse> listPendingInvitations(UUID orgId) {
         return invitationRepository.findByOrganizationIdAndStatusAndExpiresAtAfterOrderByCreatedAtAscIdAsc(
-                        orgId, InvitationStatus.PENDING, LocalDateTime.now()).stream()
+                        orgId, InvitationStatus.PENDING, Instant.now(clock)).stream()
                 .map(invitation -> new InvitationResponse(invitation.getId(), invitation.getEmail(),
                         invitation.getRole(), invitation.getStatus(),
                         invitation.getCreatedAt(), invitation.getExpiresAt()))
@@ -231,7 +234,7 @@ public class OrganizationServiceImpl implements OrganizationService {
         }
     }
 
-    private long seatsUsed(UUID orgId, LocalDateTime now) {
+    private long seatsUsed(UUID orgId, Instant now) {
         return orgMembershipRepository.countByOrganizationId(orgId)
                 + invitationRepository.countByOrganizationIdAndStatusAndExpiresAtAfter(
                         orgId, InvitationStatus.PENDING, now);

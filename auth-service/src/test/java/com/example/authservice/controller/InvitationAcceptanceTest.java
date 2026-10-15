@@ -34,7 +34,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -179,7 +180,7 @@ class InvitationAcceptanceTest {
         String token = t;
         switch (state) {
             case "unknown token" -> token = "inv-unknown-QA";
-            case "expired" -> updateInvitation(invitation -> invitation.setExpiresAt(LocalDateTime.now().minusHours(1)));
+            case "expired" -> updateInvitation(invitation -> invitation.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS)));
             case "revoked by Ben" -> assertThat(revoke(BEN, invitationId).getResponse().getStatus()).isEqualTo(204);
             default -> updateInvitation(invitation -> invitation.setStatus(InvitationStatus.ACCEPTED));
         }
@@ -250,7 +251,7 @@ class InvitationAcceptanceTest {
     @DisplayName("AC-6.8 A failed acceptance leaves no account behind")
     void aFailedAcceptanceLeavesNoAccountBehind() throws Exception {
         // Given
-        updateInvitation(invitation -> invitation.setExpiresAt(LocalDateTime.now().minusHours(1)));
+        updateInvitation(invitation -> invitation.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS)));
         assertProblem(acceptAnonymously(t, NEW_ACCOUNT), 410, "INVITATION_EXPIRED", accept(t));
 
         // When
@@ -383,7 +384,7 @@ class InvitationAcceptanceTest {
         // Given an accepted invitation whose expiry has passed
         updateInvitation(invitation -> {
             invitation.setStatus(InvitationStatus.ACCEPTED);
-            invitation.setExpiresAt(LocalDateTime.now().minusHours(1));
+            invitation.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS));
         });
         assertProblem(acceptAnonymously(t, NEW_ACCOUNT), 410, "INVITATION_ALREADY_ACCEPTED", accept(t));
 
@@ -441,13 +442,13 @@ class InvitationAcceptanceTest {
     @Test
     @DisplayName("D11: the invitation email matches the logged-in account case-insensitively")
     void theEmailMatchIsCaseInsensitive() throws Exception {
-        // Given an invitation stored with upper-case letters (seeded; the API normalises it)
+        // Given an invitation stored in lower case (the database requires it, E72), and a login typed in mixed case
         registerUser("gus@example.com");
-        seedInvitation("Gus@Example.COM", OrganizationRole.READER, "inv-gus-QA");
+        seedInvitation("gus@example.com", OrganizationRole.READER, "inv-gus-QA");
 
         // When
         MvcResult result = mockMvc.perform(post(accept("inv-gus-QA"))
-                .header(HttpHeaders.AUTHORIZATION, bearer(tokenOf(mockMvc, "gus@example.com")))).andReturn();
+                .header(HttpHeaders.AUTHORIZATION, bearer(tokenOf(mockMvc, "Gus@Example.COM")))).andReturn();
 
         // Then
         assertThat(result.getResponse().getStatus()).isEqualTo(200);
@@ -546,7 +547,7 @@ class InvitationAcceptanceTest {
     }
 
     private void seedInvitation(String email, OrganizationRole role, String token) {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         invitationRepository.save(Invitation.builder()
                 .email(email)
                 .organization(organizationRepository.findById(acme.orgId()).orElseThrow())
@@ -555,7 +556,7 @@ class InvitationAcceptanceTest {
                 .token(token)
                 .status(InvitationStatus.PENDING)
                 .createdAt(now)
-                .expiresAt(now.plusDays(7))
+                .expiresAt(now.plus(7, ChronoUnit.DAYS))
                 .build());
     }
 

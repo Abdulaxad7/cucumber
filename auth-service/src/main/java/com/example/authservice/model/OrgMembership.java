@@ -7,7 +7,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -32,9 +32,11 @@ public class OrgMembership {
     @JoinColumn(name = "org_id", nullable = false)
     private Organization organization;
 
+    @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private OrganizationRole role;
 
-    private LocalDateTime createdAt;
+    @Column(nullable = false)
+    private Instant createdAt;
 
 }

@@ -4,7 +4,7 @@ import com.example.authservice.enums.OrganizationRole;
 import com.example.authservice.enums.Plan;
 import lombok.NonNull;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @NonNull
@@ -13,7 +13,7 @@ public record OrganizationResponse(
         String name,
         Plan plan,
         Integer seatLimit,
-        LocalDateTime createdAt,
+        Instant createdAt,
         OrganizationRole myRole
 ) {
 }

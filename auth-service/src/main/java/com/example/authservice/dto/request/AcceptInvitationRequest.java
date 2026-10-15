@@ -10,6 +10,8 @@ public record AcceptInvitationRequest(
     String password,
 
     @NotBlank(message = "Full name cannot be blank")
-    @Size(max = 100, message = "Full name must be at most 100 characters long")
+    @VisibleText(message = "Full name cannot be blank")
+    @MaxCodePoints(value = 100, message = "Full name must be at most 100 characters long")
+    @StorableText(message = "Full name must not contain control characters or invalid Unicode characters")
     String fullName
 ) {}

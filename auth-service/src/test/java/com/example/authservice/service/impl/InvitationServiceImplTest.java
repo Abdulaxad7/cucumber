@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -52,6 +53,9 @@ class InvitationServiceImplTest {
     /** The real Bean Validation provider, observable by Mockito. */
     @Spy
     private Validator validator = VALIDATOR_FACTORY.getValidator();
+
+    @Spy
+    private Clock clock = Clock.systemUTC();
 
     @InjectMocks
     private InvitationServiceImpl service;

@@ -23,7 +23,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Instant;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +36,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtTokenProvider tokenProvider;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -48,8 +50,8 @@ public class AuthServiceImpl implements AuthService {
                 .passwordHash(passwordEncoder.encode(registerRequest.password()))
                 .fullName(registerRequest.fullName())
                 .status(UserStatus.PENDING_VERIFICATION)
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now()).build();
+                .createdAt(Instant.now(clock))
+                .updatedAt(Instant.now(clock)).build();
 
         User savedUser;
         try {
