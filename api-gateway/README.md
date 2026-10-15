@@ -43,7 +43,7 @@ Any other path gets 401 without a valid token and 404 with one. Routes and publi
 | auth-service base URL | `AUTH_SERVICE_URL` | `http://localhost:8081` | same |
 | scenario-service base URL | `SCENARIO_SERVICE_URL` | `http://localhost:8082` | same |
 | report-service base URL | `REPORT_SERVICE_URL` | `http://localhost:8083` | same |
-| JWT shared secret | `JWT_SECRET` | none, so the gateway refuses to start | DEV ONLY value in `application-dev.yaml`, identical to auth-service's |
+| JWT shared secret | `JWT_SECRET` | none, so the gateway refuses to start | from the gitignored `.env` in the repository root, shared with auth-service |
 | CORS allowed origins (comma-separated, exact origins) | `CORS_ALLOWED_ORIGINS` | empty, so no cross-origin access | `http://localhost:3000,http://localhost:5173` |
 | Connect timeout | `GATEWAY_CONNECT_TIMEOUT` | `2s` | `2s` |
 | Response timeout | `GATEWAY_RESPONSE_TIMEOUT` | `10s` | `10s` |
@@ -63,6 +63,10 @@ openssl rand -base64 64 | tr -d '\n'
 
 ## Run locally
 
+One-time setup: copy `.env.example` to `.env` in the repository root and fill in `JWT_SECRET` and
+`AUTH_DB_PASSWORD` (the file shows how to generate them). Both services' `dev` profiles read this gitignored file;
+never commit it.
+
 Each service is an independent Gradle build. Start auth-service first, then the gateway, each in its own terminal,
 both with the `dev` profile:
 
@@ -71,7 +75,7 @@ cd auth-service && ./gradlew bootRun --args='--spring.profiles.active=dev'
 cd api-gateway  && ./gradlew bootRun --args='--spring.profiles.active=dev'
 ```
 
-Without the `dev` profile, both services need `JWT_SECRET` in the environment.
+Without the `dev` profile (or without `.env`), both services need `JWT_SECRET` in the environment.
 
 Other ways to activate the `dev` profile for a local run:
 

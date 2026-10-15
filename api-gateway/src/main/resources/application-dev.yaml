@@ -1,7 +1,12 @@
+spring:
+  config:
+    # DEV ONLY: JWT_SECRET comes from the gitignored .env in the repository root (see .env.example),
+    # or from the environment. ../.env covers runs from the api-gateway directory.
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+
 jwt:
-  # DEV ONLY: local-development JWT secret for the "dev" profile. Never use it in any other environment.
-  # Must stay identical to app.jwtSecret in auth-service/src/main/resources/application-dev.yaml (D3, D4).
-  secret: 2wvKJaMRAuY+9mMPrChKZqbYJRc4Z6+OQO5ZAoWS6shgMZ0op8cQWfJycolql2Ylt2FObJ94OPPPYPsgpdrGWA==
+  # The same JWT_SECRET as auth-service (D3, D4). Empty when unset, so start-up fails naming JWT_SECRET.
+  secret: ${JWT_SECRET:}
 
 gateway:
   cors:

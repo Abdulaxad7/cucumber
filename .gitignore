@@ -1,0 +1,14 @@
+.idea
+.DS_Store
+.claude
+*.iml
+
+# Local secrets (copy .env.example to .env); never commit
+.env
+*.env
+!.env.example
+
+# Build output
+**/build/
+**/.gradle/
+out/

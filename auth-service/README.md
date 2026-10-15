@@ -15,13 +15,18 @@ cd auth-service
 
 - Port: **8081** (`server.port`). Normal clients call it through the API gateway on port 8080; direct calls on 8081
   are for local development only.
-- The `dev` profile supplies a development-only JWT secret and database settings, and logs SQL statements through the
-  logger `org.hibernate.SQL` (with request and user ids, `?` placeholders only). Never use the `dev` profile outside a
+- The `dev` profile supplies the local database URL and username, reads `JWT_SECRET` and `AUTH_DB_PASSWORD` from the
+  gitignored `.env` in the repository root (or from the environment), and logs SQL statements through the logger
+  `org.hibernate.SQL` (with request and user ids, `?` placeholders only). Never use the `dev` profile outside a
   developer machine.
+- One-time setup for `dev`: copy `.env.example` to `.env` in the repository root and fill in both values (the file
+  shows how to generate them). The gateway reads the same file, so both services share the JWT secret. Never commit
+  `.env`; without it (and without the environment variables) start-up fails naming the missing variable.
 - Without the `dev` profile you must set `AUTH_DB_URL`, `AUTH_DB_USERNAME`, `AUTH_DB_PASSWORD` and `JWT_SECRET`
   (setting `app.jwtSecret`). `JWT_SECRET` is the standard Base64 encoding of at least 64 random bytes, the same value
   the gateway uses. The service refuses to start without a usable secret.
-  For example, generate one with `head -c 64 /dev/urandom | base64` and keep it out of version control.
+  For example, generate one with `openssl rand -base64 64 | tr -d '\n'` and keep it out of version control.
+- `AUTH_DB_*` values must not contain `${`: Spring would treat it as a placeholder (FU-24).
 
 ```sh
 AUTH_DB_URL='jdbc:postgresql://localhost:5432/auth_service' AUTH_DB_USERNAME='auth_service' \
@@ -32,19 +37,19 @@ AUTH_DB_URL='jdbc:postgresql://localhost:5432/auth_service' AUTH_DB_USERNAME='au
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `app.jwtSecret` (`JWT_SECRET`) | none (the `dev` profile sets one) | Shared HS512 secret, standard Base64 of at least 64 bytes |
+| `app.jwtSecret` (`JWT_SECRET`) | none (`.env` with the `dev` profile) | Shared HS512 secret, standard Base64 of at least 64 bytes |
 | `app.jwtExpirationInMs` | `86400000` (24 h) | Lifetime of issued tokens |
 | `app.orgs.free-seat-limit` | `5` | Seat limit of every organization created in phase 1 (plan `FREE`); must be positive |
 | `spring.datasource.url` (`AUTH_DB_URL`) | none (the `dev` profile sets one) | JDBC URL of the auth_service database, without credentials |
 | `spring.datasource.username` (`AUTH_DB_USERNAME`) | none (the `dev` profile sets one) | Database role |
-| `spring.datasource.password` (`AUTH_DB_PASSWORD`) | none (the `dev` profile sets one) | Database password; never logged |
+| `spring.datasource.password` (`AUTH_DB_PASSWORD`) | none (`.env` with the `dev` profile) | Database password; never logged |
 
 A missing or blank `AUTH_DB_*` value stops start-up with a message that names the variable and never shows a value.
 
 ## Running locally with PostgreSQL
 
-The `dev` profile expects PostgreSQL 17 on `localhost:5432`, database and role `auth_service`, password
-`auth_service_dev_only` (DEV ONLY values in `application-dev.yaml`). The database must use UTF-8 and the builtin
+The `dev` profile expects PostgreSQL 17 on `localhost:5432`, database and role `auth_service`, and the password from
+`AUTH_DB_PASSWORD` in `.env`. The database must use UTF-8 and the builtin
 `C.UTF-8` locale, which exists from PostgreSQL 17 on, so lists sort by code point on every machine.
 
 Recommended: a Docker container (Docker Desktop runs for the tests anyway). One-time setup:
@@ -54,8 +59,9 @@ Recommended: a Docker container (Docker Desktop runs for the tests anyway). One-
 2. Start the container:
 
    ```sh
+   set -a; . ./.env; set +a   # from the repository root: loads AUTH_DB_PASSWORD
    docker run -d --name cucumber-postgres --restart unless-stopped -p 5432:5432 \
-     -e POSTGRES_USER=auth_service -e POSTGRES_PASSWORD=auth_service_dev_only -e POSTGRES_DB=auth_service \
+     -e POSTGRES_USER=auth_service -e POSTGRES_PASSWORD="$AUTH_DB_PASSWORD" -e POSTGRES_DB=auth_service \
      -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8" \
      -v cucumber-postgres-data:/var/lib/postgresql/data postgres:17
    ```
@@ -72,7 +78,7 @@ On another host port, for example 5433 (`-p 5433:5432`), override the URL on the
 Alternative: a PostgreSQL 17 server of your own (for example Postgres.app with a version 17 server), with:
 
 ```sql
-CREATE ROLE auth_service LOGIN PASSWORD 'auth_service_dev_only';
+CREATE ROLE auth_service LOGIN PASSWORD '<AUTH_DB_PASSWORD from .env>';
 CREATE DATABASE auth_service OWNER auth_service TEMPLATE template0 ENCODING 'UTF8'
     LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF-8';
 ```

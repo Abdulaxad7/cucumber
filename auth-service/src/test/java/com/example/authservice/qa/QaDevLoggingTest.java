@@ -11,15 +11,12 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.logging.LogLevel;
 import org.springframework.boot.logging.LoggerConfiguration;
 import org.springframework.boot.logging.LoggingSystem;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.core.env.Environment;
-import org.springframework.core.env.PropertySource;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
@@ -42,7 +39,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * personal data and secrets (register, log in, create an organization, invite, accept anonymously, log in again, and
  * a registration that a database constraint rejects) logs its SQL through {@code org.hibernate.SQL} with the request
  * id, and no line contains an email, a full name, a password, a password hash, an invitation token, an access token,
- * the dev database password, the dev JWT secret, a bound value or PostgreSQL's error DETAIL. The context is the one
+ * the JWT secret this context signs with, a bound value or PostgreSQL's error DETAIL. The context is the one
  * of {@code configuration/DevSqlLoggingTest} (the dev profile on the shared test database).
  * <p>
  * Log levels live in the one Logback configuration of the test JVM, and every test context that starts later
@@ -95,7 +92,7 @@ class QaDevLoggingTest {
         // Given
         int logStart = output.getAll().length();
         List<String> secrets = new ArrayList<>(List.of("fay-dev-qa@example.com", "Fay DevQA", "kit-dev-qa@example.com",
-                "Kit DevQA", PASSWORD, "\uA7C0dev-qa@example.com", "auth_service_dev_only", devJwtSecret()));
+                "Kit DevQA", PASSWORD, "\uA7C0dev-qa@example.com", environment.getRequiredProperty("app.jwtSecret")));
 
         // When
         int registered = perform(json(post("/api/auth/register"),
@@ -157,11 +154,5 @@ class QaDevLoggingTest {
                 "{\"email\":\"" + email + "\",\"password\":\"" + PASSWORD + "\"}"));
         assertThat(login.getResponse().getStatus()).isEqualTo(200);
         return JsonPath.read(login.getResponse().getContentAsString(), "$.accessToken");
-    }
-
-    private static String devJwtSecret() throws Exception {
-        List<PropertySource<?>> dev = new YamlPropertySourceLoader()
-                .load("application-dev.yaml", new ClassPathResource("application-dev.yaml"));
-        return String.valueOf(dev.get(0).getProperty("app.jwtSecret"));
     }
 }
