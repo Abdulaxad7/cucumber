@@ -1,0 +1,2419 @@
+openapi: 3.1.0
+info:
+  title: auth-service API
+  version: 1.3.0
+  summary: Accounts, login, organizations, invitations, members, projects and the project access check.
+  description: |
+    Contract C1 of `docs/specs/auth-service.md` (phase 1) and contracts C1 and C5 of
+    `docs/specs/auth-service-projects.md` (phase 2). It documents every operation, the error format (D2) and the token
+    rules (C2). The paths, status codes and `code` values here come from the specs' acceptance criteria (AC-x.y) and
+    are binding. Wording of `detail` and validation `message` texts is not part of the contract. Where an AC is cited
+    without a spec, phase-1 operations refer to the phase-1 spec and project operations to the phase-2 spec.
+
+    ## Changes in 1.3.0 (auth-service phase 4, `docs/specs/auth-service-persistence.md`, 2026-10-15)
+
+    No path, operation or `code` value is added or removed, and existing success responses keep their fields. The
+    timestamp format and the stricter input rules below are the only visible changes; the move to PostgreSQL with
+    Flyway migrations is internal.
+    - **Timestamps are UTC** (phase-4 D6, T5): every timestamp is an ISO-8601 instant with a `Z` offset and 0 to 6
+      fraction digits, for example `2026-10-14T09:30:00.123456Z` (schema `Timestamp`, which replaces
+      `LocalDateTime`). Timestamps now carry a `Z` offset. Clients that parsed offset-less strings must accept an
+      offset. No client existed at the time of the change.
+    - Names and emails that contain a control character or a lone surrogate are 400 `VALIDATION_FAILED` (phase-4 D11
+      rule T1, T1); see the request field descriptions.
+    - Names made only of whitespace or invisible format characters are blank, and the 100-character name limits count
+      Unicode code points (phase-4 D11 rules T2 and T3, T11).
+    - A JSON number or boolean where a string belongs is 400 `MALFORMED_REQUEST`, no longer coerced to text (phase-4
+      D12, T12). `null` is unchanged: 400 `VALIDATION_FAILED`.
+    - Path ids must be canonical UUIDs (36 characters, hexadecimal digits in groups of 8-4-4-4-12; upper-case digits
+      are accepted and identify the same resource). Anything else, for example `1-1-1-1-1`, is 400
+      `MALFORMED_REQUEST` before authorization (phase-4 D13, T13).
+
+    ## Changes in 1.2.1 (phase-2 T11 and T16, 2026-10-13)
+
+    Wording and error-list sync with the implementation; no path, schema or success response changes.
+    - `CreateProjectRequest.name`: the 1–100 length is counted before trimming (phase-2 D5, Q3), so 100 characters with
+      a surrounding space is 400 `VALIDATION_FAILED`.
+    - `archiveProject` and `restoreProject` list 409 `CONFLICT`: like every project write, they take the organization
+      lock and can answer it under heavy contention (AC-1.9).
+
+    ## Changes in 1.2.0 (auth-service phase 2, task T8, 2026-10-13)
+
+    Additive only: no phase-1 path, status code, `code` value or response shape changes.
+    - Projects inside an organization: create, list, view, rename, archive and restore, under
+      `/api/orgs/{orgId}/projects` (phase-2 US-1 to US-3).
+    - Project members: list, add, change role, remove and leave (phase-2 US-4, US-5).
+    - The project access check for other services, `GET /internal/projects/{projectId}/access` (phase-2 US-7,
+      contract C5). It is service-to-service and never routed by the gateway.
+    - Four new `code` values: `PROJECT_NAME_TAKEN` (409), `PROJECT_ARCHIVED` (409), `NOT_ORG_MEMBER` (422) and
+      `PROJECT_ROLE_NOT_ALLOWED` (422) (phase-2 D14).
+    - New schemas: `ProjectRole`, `Project`, `ProjectMember`, `ProjectAccess`, `CreateProjectRequest`,
+      `RenameProjectRequest`, `AddProjectMemberRequest` and `ChangeProjectMemberRoleRequest`.
+    - `OrganizationRole` now states that leading and trailing ASCII whitespace is ignored (phase-1 FU-7, BUG-6, Q9).
+      That documents existing behaviour; `ProjectRole` gets the same wording.
+    - Organization membership and role changes now carry through to projects (phase-2 US-6), as described under
+      "Projects". The organization operations' paths, statuses and bodies don't change.
+
+    ## Implementation status (1.3.0, review point E, 2026-10-15)
+
+    Every operation in this file is implemented as described on PostgreSQL 17, including every 1.3.0 change,
+    pending qa verification of phase 4.
+
+    ## Implementation status (1.2.1, review point C, 2026-10-13)
+
+    Every operation in this file is implemented as described, pending qa verification: phase 1, the access check
+    (phase-2 T7), the project and project-member operations (T11–T14), and the carry-through of organization changes
+    to projects (T15).
+
+    ## Implementation status (review point C, 2026-10-12)
+
+    Every operation in this file is implemented as described (T1–T14), pending qa verification. Version 1.0.0 is the
+    phase-1 contract.
+
+    ## Changes in 1.1.0 (fix round T16–T21, 2026-10-12, spec D13)
+
+    None of these changes a success response. They make error answers more specific:
+    - A lock that can't be acquired in time is 409 `CONFLICT`, no longer 500 `INTERNAL_ERROR` (AC-1.9).
+    - A `role` sent as a number or as a string of digits (`0`, `1`, `"3"`) is 400 `MALFORMED_REQUEST`; it is never
+      mapped by the enum's declaration order (AC-5.11, AC-7.8). Before, it was accepted.
+    - A login password longer than 72 UTF-8 bytes is 401 `INVALID_CREDENTIALS`, with the same `detail` as any wrong
+      password and no validation error (AC-2.10). Before, a 72-byte password with any suffix logged in.
+    - The losers of simultaneous registrations of one email get 409 `EMAIL_ALREADY_REGISTERED`, like a late
+      registration (AC-2.11). Before, they got 409 `CONFLICT`.
+    - Revoking an invitation applies the role ceiling: 422 `ROLE_CEILING` when the invitation's role ranks above the
+      caller's (AC-5.12). Before, an `ADMIN` could revoke an `OWNER` invitation (204).
+    - An anonymous accept with no body, or with an empty body, lists `fullName` and `password` as separate `errors`
+      entries, like `{}` (AC-6.10). Before, it had one entry whose `field` was `acceptInvitationRequest`.
+
+    ## Known phase-1 deviation (follow-up FU-1)
+
+    Requests rejected before Spring MVC handles them don't get a Problem with `code` yet. Paths that the security
+    firewall rejects (for example containing `;`, `/./`, `%2e` or `//`), the `TRACE` method and a direct `GET /error`
+    get Spring Boot's default JSON error body, with a correct status. A path containing an encoded slash (`%2F`) gets
+    Tomcat's HTML error page. Nothing internal is exposed. Follow-up FU-1 (with the gateway's FU-3) turns the first
+    three into Problems; the `%2F` page stays out of scope.
+
+    ## Which error wins (Q6)
+
+    When several errors apply, checks run in a fixed order and the first failure is returned. The descriptions of
+    `createInvitation`, `acceptInvitation`, `changeMemberRole` and `removeMember`, and of every project operation
+    that writes, list their order. Request-body validation (400) runs before authorization (403), so a caller who
+    isn't allowed but sends an invalid body gets 400; nothing about the organization or project is revealed by it
+    (phase-1 A3, phase-2 A3).
+
+    ## Calling the service
+
+    - Through the gateway: `http://localhost:8080` (normal use). External paths equal service paths; the gateway does
+      no rewriting. Through the gateway, a missing or invalid token on a protected operation gets the **gateway's**
+      401 Problem (it has `requestId` but no `code`), and the request never reaches auth-service.
+    - Directly: `http://localhost:8081` (local development only). Swagger UI (`/swagger-ui/**`) and the runtime
+      document (`/v3/api-docs`) are public here and are not routed by the gateway. This file, not `/v3/api-docs`, is
+      the contract (D9).
+
+    ## Authentication (D4, D7, C2)
+
+    - Exactly three operations are public (`security: []`): `POST /api/auth/register`, `POST /api/auth/login` and
+      `POST /api/auth/invitations/{token}/accept`. Every other path, including any unknown `/api/auth/...` path,
+      `/h2-console` and `/actuator/**`, needs a valid token and otherwise gets 401 `UNAUTHENTICATED` (AC-3.6).
+    - On a public operation an invalid, expired or unusable token is ignored and the caller is anonymous, so a user
+      with an expired token can still log in (AC-2.8).
+    - Every authenticated request loads the user from the database. A token whose user no longer exists (AC-3.5) or
+      is `SUSPENDED` (AC-3.4) gets 401 `UNAUTHENTICATED`.
+    - Users with status `PENDING_VERIFICATION` can log in and use the API in phase 1 (AC-2.7).
+
+    ## Authorization (D3, D11)
+
+    - Organization roles and their rank: `OWNER` 4 > `ADMIN` 3 > `MEMBER` 2 > `READER` 1. Project roles are described
+      under "Projects".
+    - The caller's role is read **from the database on every request**, never from the token's `orgs` claim, which
+      is informational and stale until the next login. A role change or removal takes effect on the next request
+      (AC-7.6, AC-8.2), and a new organization is usable with the token the creator already holds (AC-4.7).
+    - A non-member and a non-existent organization get the same 403 `FORBIDDEN`, so organization ids can't be probed
+      (AC-4.6).
+    - **Role ceiling:** an actor may invite with, change to, or change or remove a member holding, only roles whose
+      rank is at most the actor's own rank, and may revoke only invitations whose role rank is at most their own
+      (422 `ROLE_CEILING`). An `OWNER` can do everything, including making another `OWNER`.
+    - **Seats:** seats used = members + `PENDING` invitations whose `expiresAt` is in the future. `seatLimit: null`
+      means unlimited. Organizations created in phase 1 are on plan `FREE` with seat limit 5 (setting
+      `app.orgs.free-seat-limit`). Two concurrent requests for the last seat can't both succeed.
+
+    ## Projects (phase 2: D3–D6, D9)
+
+    A project belongs to exactly one organization. Its content (features, runs, results) lives in other services,
+    which refer to it by `id`.
+
+    - **Project roles and their rank:** `ADMIN` 4 > `MEMBER` 3 > `TESTER` 2 > `READER` 1. Compare project roles by
+      rank only, never by string or declaration order. Each role includes the ones below it.
+    - **Effective project role:** computed from the database on every request, never from the token:
+      - not a member of the project's organization: none;
+      - organization `OWNER` or `ADMIN`: `ADMIN` (implicit project admin, on every project of the organization,
+        without a membership row);
+      - otherwise the caller's explicit project role, or none.
+
+      `myRole` in project responses and `role` in the access check are always the effective role. A change applies to
+      the next request, whatever the caller's token says (AC-5.5, AC-5.8, AC-7.5). "Has access" means "has an
+      effective project role".
+    - **Project role cap:** an explicit membership's role is at most the cap of the member's organization role. An
+      organization `READER` can only be a project `READER`; an organization `MEMBER`, `ADMIN` or `OWNER` can hold any
+      project role (422 `PROJECT_ROLE_NOT_ALLOWED`).
+    - **Who can do what:**
+
+      | Operation | Allowed |
+      |---|---|
+      | Create a project | Organization `OWNER` or `ADMIN` |
+      | List an organization's projects | Any organization member; lists only the projects the caller has access to |
+      | View a project, list its members | Has access (any effective role) |
+      | Rename, archive, restore | Effective project `ADMIN` |
+      | Add a member, change a role, remove someone else | Effective project `ADMIN` |
+      | Leave (remove yourself) | Any explicit member |
+      | Access check | Has access |
+
+    - **No probing:** no access, an unknown project, and a project of another organization (also a project id under
+      the wrong `orgId` in the path) all get the same 403 `FORBIDDEN` (AC-2.3, AC-7.2).
+    - **Names:** 1–100 characters and not blank, stored trimmed (AC-1.8). Unique per organization, archived projects
+      included, compared after trimming and lower-casing (409 `PROJECT_NAME_TAKEN`, AC-1.4). The same name may exist
+      in another organization (AC-1.5). Renaming a project to its own name in another letter case is allowed
+      (AC-3.2).
+    - **Archive:** sets `archivedAt`. An archived project stays visible and readable to everyone with access
+      (AC-2.4, AC-3.5), but it is read-only: renaming and every membership change, leaving included, get 409
+      `PROJECT_ARCHIVED` (AC-3.6). Restore clears `archivedAt`. Archive and restore are idempotent: 200 with the
+      unchanged state (AC-3.8). Projects can't be deleted.
+    - **Members:** only current members of the project's organization can be added, by user id, with a project role.
+      There are no project invitations: invite to the organization first. A project membership uses no organization
+      seat (AC-4.8). The member list shows explicit members only; implicit admins appear in it only if they also have
+      an explicit membership, which they keep but which doesn't lower their effective role (AC-4.9).
+    - **Organization changes carry through (US-6),** in the same transaction as the organization change:
+      - a user who leaves or is removed from an organization loses every membership in its projects, so rejoining
+        starts without project access (AC-6.1, AC-6.2);
+      - a user whose organization role becomes `READER` has their explicit project roles above `READER` in that
+        organization lowered to `READER` (AC-6.3); a later promotion doesn't restore them;
+      - becoming organization `ADMIN` or `OWNER` gives implicit `ADMIN` on every project, and losing it removes that
+        (AC-6.5, AC-6.6). Other organization role changes keep explicit project roles (AC-6.4).
+    - **Order:** projects are listed by name (case-insensitive), then by id; project members by email.
+    - **Concurrency:** of simultaneous creations with one name, exactly one succeeds and every other one gets 409
+      `PROJECT_NAME_TAKEN` (AC-1.7). Two simultaneous adds of one user give one membership and one 409
+      `ALREADY_MEMBER`, never a 500.
+
+    ## Errors (D2)
+
+    Every error auth-service produces is an RFC 9457 Problem (`application/problem+json`, schema `Problem`) with
+    `type` `about:blank`, `title` (the HTTP reason phrase), `status`, a non-empty `detail`, `instance` (the request
+    path without the query string) and the stable extension member `code`. Clients branch on `status` first and on
+    `code` second. Validation Problems add `errors`. When the request carries an `X-Request-Id` header matching
+    `^[A-Za-z0-9._-]{1,128}$` (the gateway always sends one), the body has `requestId` with that value; auth-service
+    never sets an `X-Request-Id` response header. Bodies never contain stack traces, exception class names, SQL or
+    internal hosts and ports.
+
+    | Situation | Status | `code` |
+    |---|---|---|
+    | Bean Validation failure on a body or parameter | 400 | `VALIDATION_FAILED` (with `errors`) |
+    | Unreadable JSON, a JSON number or boolean where a string belongs (phase-4 D12), a wrong enum value (including a number or a string of digits), a path id that isn't a canonical UUID (phase-4 D13) | 400 | `MALFORMED_REQUEST` |
+    | No or invalid credentials on a protected operation | 401 | `UNAUTHENTICATED` |
+    | Wrong email or password (including a password over 72 UTF-8 bytes), or a suspended account, at login | 401 | `INVALID_CREDENTIALS` |
+    | Authenticated, but not allowed (not a member, role too low; for projects also no access, an unknown project, or a project of another organization) | 403 | `FORBIDDEN` |
+    | Accepting an invitation addressed to another email | 403 | `INVITATION_EMAIL_MISMATCH` |
+    | Unknown path | 404 | `NOT_FOUND` |
+    | Invitation token or id unknown (or in another organization) | 404 | `INVITATION_NOT_FOUND` |
+    | Target user isn't a member of the organization, or isn't an explicit member of the project | 404 | `MEMBER_NOT_FOUND` |
+    | Method not supported | 405 | `METHOD_NOT_ALLOWED` |
+    | No acceptable response media type for the `Accept` header | 406 | `NOT_ACCEPTABLE` |
+    | Email already registered, also when another request registers it at the same moment | 409 | `EMAIL_ALREADY_REGISTERED` |
+    | Invitee is already a member; or the user being added to a project is already an explicit member | 409 | `ALREADY_MEMBER` |
+    | Another project in the organization already has that name (trimmed, case-insensitive, archived projects included) | 409 | `PROJECT_NAME_TAKEN` |
+    | Renaming an archived project, or changing its members (leaving included) | 409 | `PROJECT_ARCHIVED` |
+    | A pending, unexpired invitation already exists for that email | 409 | `INVITATION_PENDING` |
+    | No free seat | 409 | `SEAT_LIMIT_REACHED` |
+    | The last owner tries to leave | 409 | `LAST_OWNER` |
+    | Revoking an invitation that isn't pending | 409 | `INVITATION_NOT_PENDING` |
+    | Any other unique-constraint conflict | 409 | `CONFLICT` |
+    | A lock that can't be acquired in time (another request is changing the same data) | 409 | `CONFLICT` |
+    | Invitation expired / revoked / already accepted (on accept) | 410 | `INVITATION_EXPIRED` / `INVITATION_REVOKED` / `INVITATION_ALREADY_ACCEPTED` |
+    | Unsupported `Content-Type` | 415 | `UNSUPPORTED_MEDIA_TYPE` |
+    | Any other 4xx that Spring MVC raises itself and that no row above covers (for example a missing required parameter or header) | Spring's status, unchanged | `MALFORMED_REQUEST` |
+    | Role above the actor's own rank (grant, change, remove, or revoke an invitation) | 422 | `ROLE_CEILING` |
+    | Changing your own role (organization or project) | 422 | `SELF_ROLE_CHANGE` |
+    | Adding a user to a project who isn't a member of the project's organization, or doesn't exist | 422 | `NOT_ORG_MEMBER` |
+    | A project role above the cap of the member's organization role | 422 | `PROJECT_ROLE_NOT_ALLOWED` |
+    | Anything unexpected | 500 | `INTERNAL_ERROR` |
+
+    - Acceptance criteria: validation errors list each invalid field (AC-1.1); an unreadable body is
+      `MALFORMED_REQUEST`, also on public operations (AC-1.2); an unexpected failure reveals nothing internal and is
+      logged once (AC-1.3); unknown paths (AC-1.4), unsupported methods (AC-1.5) and content types (AC-1.6) get their
+      Problems; `requestId` follows the rule above (AC-1.7).
+    - A lock that can't be acquired in time is 409 `CONFLICT`, logged at WARN without a stack trace, and the request
+      changes nothing (AC-1.9). Any operation that writes can answer it under heavy contention; clients may retry.
+    - On `acceptInvitation` errors, `instance` is the request path and so contains the acceptance token. It is the
+      caller's own input, echoed only to that caller, and never logged (spec D13, Q3).
+    - Every 401 (`UNAUTHENTICATED` and `INVALID_CREDENTIALS`) carries `WWW-Authenticate: Bearer` (RFC 9110 §15.5.2).
+    - A 406 Problem is written as `application/problem+json` only when the request's `Accept` header allows that
+      media type; otherwise the 406 body may be empty.
+    - Unknown paths (404 `NOT_FOUND`) and unsupported methods on known paths (405 `METHOD_NOT_ALLOWED`, for example
+      `DELETE /api/orgs` or `PUT /api/orgs/{orgId}`) apply to every path and are not repeated per operation.
+    - Through the gateway, the gateway's own errors (401, 403 for CORS, 404 for unrouted paths, 502, 503, 504) have
+      no `code`. Clients must handle a Problem without `code`.
+
+    ## Headers and other rules (C4)
+
+    - `Location` headers are relative (`/api/orgs/{id}`).
+    - auth-service never emits CORS headers (`Access-Control-*`); the gateway is the CORS authority (AC-1.8).
+    - Emails are trimmed and lower-cased before they are stored or compared (D12), at registration, login,
+      invitation and acceptance. Validation runs on the raw input.
+    - Timestamps (`createdAt`, `expiresAt`, `joinedAt`, `archivedAt`) are UTC instants: ISO-8601 with a `Z` offset and
+      0 to 6 fraction digits (microseconds at most), for example `2026-10-14T09:30:00.123456Z` (phase-4 D6). The
+      server's time zone never changes them.
+    - Lists are not paginated in phase 1 or phase 2.
+  x-spec: docs/specs/auth-service.md
+  x-spec-projects: docs/specs/auth-service-projects.md
+servers:
+  - url: http://localhost:8080
+    description: Through the API gateway (normal use).
+  - url: http://localhost:8081
+    description: Direct to auth-service (local development; Swagger UI and `/v3/api-docs` only here).
+security:
+  - bearerAuth: []
+tags:
+  - name: Accounts
+    description: Registration and login (US-2).
+  - name: Organizations
+    description: Create, list and view organizations (US-4).
+  - name: Invitations
+    description: Invite, list and revoke (US-5); accept (US-6).
+  - name: Members
+    description: List members, change roles, remove and leave (US-7, US-8).
+  - name: Projects
+    description: Create, list, view, rename, archive and restore projects (phase-2 US-1 to US-3).
+  - name: Project members
+    description: List, add, change roles, remove and leave (phase-2 US-4, US-5).
+  - name: Project access check
+    description: |
+      Service-to-service (phase-2 US-7, contract C5). Called by other services directly on auth-service's base URL,
+      never through the gateway.
+  - name: Tooling
+    description: Development tooling on the service port only.
+paths:
+  /api/auth/register:
+    post:
+      tags:
+        - Accounts
+      operationId: register
+      summary: Register a new account
+      description: |
+        Public. Creates an account with status `PENDING_VERIFICATION` and `mfaEnabled` false (AC-2.1). The email is
+        normalised (trimmed, lower-cased) before it is stored, so `Ana@Example.COM` and `ana@example.com` are the same
+        account (AC-2.2). The response never contains the password or its hash. Registration does not log the user in;
+        call `POST /api/auth/login` next.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: Fay@Example.com
+              password: Secret123!
+              fullName: Fay Lin
+      responses:
+        '201':
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                id: 6f1c2a9e-3b7d-4c55-9a10-2f4e8b6d0c31
+                email: fay@example.com
+                fullName: Fay Lin
+                status: PENDING_VERIFICATION
+                mfaEnabled: false
+                createdAt: '2026-10-12T09:30:00.123456Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `EMAIL_ALREADY_REGISTERED`: an account with this email exists, in any letter case (AC-2.2, AC-1.7). Of
+            several simultaneous registrations of one email, exactly one succeeds and every other one gets this code
+            (AC-2.11).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: An account with this email already exists.
+                instance: /api/auth/register
+                code: EMAIL_ALREADY_REGISTERED
+                requestId: rid-123
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/auth/login:
+    post:
+      tags:
+        - Accounts
+      operationId: login
+      summary: Log in and get an access token
+      description: |
+        Public. Returns an HS512 JWT valid for 24 hours (contract C2, AC-2.3). The email is matched case-insensitively
+        (AC-2.5). A wrong password, an unknown email and a `SUSPENDED` account all get the same 401
+        `INVALID_CREDENTIALS` body, so login doesn't reveal whether an email exists (AC-2.4, AC-2.6). An invalid or
+        expired `Authorization` header on this request is ignored (AC-2.8).
+
+        No account can have a password longer than 72 UTF-8 bytes (the BCrypt limit), so a longer login password is
+        always 401 `INVALID_CREDENTIALS`, with the same `detail` and no validation error (AC-2.10).
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: ana@example.com
+              password: Secret123!
+      responses:
+        '200':
+          description: Logged in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                accessToken: eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiI2ZjFjMmE5ZS0uLi4ifQ.signature
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: |
+            `INVALID_CREDENTIALS`: wrong email or password (including any password over 72 UTF-8 bytes), or a
+            suspended account. Same `detail` in every case.
+          headers:
+            WWW-Authenticate:
+              $ref: '#/components/headers/WWWAuthenticate'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: The email or password is incorrect.
+                instance: /api/auth/login
+                code: INVALID_CREDENTIALS
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/auth/invitations/{token}/accept:
+    post:
+      tags:
+        - Invitations
+      operationId: acceptInvitation
+      summary: Accept an invitation (new or existing account)
+      description: |
+        Public. Joins the invitation's organization with the invitation's role. The whole use case is one
+        transaction: on any error no account and no membership are created (AC-6.8).
+
+        **Anonymous caller (no account yet):** sends `password` and `fullName` (the same rules as registration). The
+        account is created with the invitation's email and status `PENDING_VERIFICATION`, and joins the organization
+        (`201`, AC-6.1). The response doesn't log the user in; call `POST /api/auth/login` next. If the invitation's
+        email already has an account, the answer is 409 `EMAIL_ALREADY_REGISTERED` and the caller must log in first
+        (AC-6.5). A missing or invalid body is 400 `VALIDATION_FAILED` (AC-6.6). No body, an empty body and `{}` give
+        the same `errors`: one entry each for `fullName` and `password` (AC-6.10).
+
+        **Authenticated caller (existing account):** sends a valid `Authorization: Bearer` token, normally with no
+        body (`200`, AC-6.2). A well-formed JSON body is **ignored without validation**, because the caller's identity
+        comes from the token (Q3); an unreadable body is still 400 `MALFORMED_REQUEST`. The invitation's email must
+        equal the caller's email, case-insensitively, otherwise 403 `INVITATION_EMAIL_MISMATCH` and nothing changes
+        (AC-6.3). An invalid or expired token is ignored and the caller is treated as anonymous (D7).
+
+        **Response (Q2):** `200` and `201` have the same schema, `AcceptInvitationResponse`, and both `user` and
+        `organization` are always present: the account and the organization it joined, with `myRole` set to the
+        invitation's role.
+
+        **Checks for both:** the token must exist (404 `INVITATION_NOT_FOUND`), and the invitation must be `PENDING`
+        and unexpired (410 `INVITATION_EXPIRED`, `INVITATION_REVOKED` or `INVITATION_ALREADY_ACCEPTED`, AC-6.4). The
+        caller must not already be a member (409 `ALREADY_MEMBER`, AC-6.7), and the organization must have a free
+        seat: members < seat limit (409 `SEAT_LIMIT_REACHED`, AC-6.9). The token is never logged and never returned.
+
+        **Single use (Q5):** the invitation's state is checked and claimed before any account or membership is
+        written. Of two concurrent acceptances of one token, one succeeds and the other gets exactly what a second,
+        sequential acceptance gets: 410 `INVITATION_ALREADY_ACCEPTED`, with no account and no membership created and
+        never a 500.
+
+        **Which error wins (Q6):** body validation, anonymous callers only (400 `VALIDATION_FAILED`); then 404
+        `INVITATION_NOT_FOUND`; then 410 `INVITATION_ALREADY_ACCEPTED`, `INVITATION_REVOKED`, `INVITATION_EXPIRED`, in
+        that order; then, for a logged-in caller, 403 `INVITATION_EMAIL_MISMATCH` and 409 `ALREADY_MEMBER`, or, for an
+        anonymous caller, 409 `EMAIL_ALREADY_REGISTERED`; then 409 `SEAT_LIMIT_REACHED`.
+
+        **`instance` holds the token:** on every error of this operation, the Problem's `instance` is the request path
+        and so contains the acceptance token. It is the caller's own input, echoed only to that caller, and never
+        logged (spec D13, Q3).
+
+        Security: public (`security: []`), but an `Authorization: Bearer` token is read when present and valid, and
+        it decides which of the two flows above applies.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The acceptance token from the create-invitation response (32 URL-safe characters in phase 1).
+          schema:
+            type: string
+          example: q3Xb0v6m1T2cJw8Hk4Zr9Ya5Lp7Nd0Es
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: false
+        description: |
+          Required for an anonymous caller. An authenticated caller normally omits it; if sent, a well-formed body is
+          ignored without validation (Q3).
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInvitationRequest'
+            example:
+              password: Secret123!
+              fullName: Fay Lin
+      responses:
+        '200':
+          description: An existing, logged-in account joined the organization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptInvitationResponse'
+              example:
+                user:
+                  id: 6f1c2a9e-3b7d-4c55-9a10-2f4e8b6d0c31
+                  email: fay@example.com
+                  fullName: Fay Lin
+                  status: PENDING_VERIFICATION
+                  mfaEnabled: false
+                  createdAt: '2026-10-11T18:02:11.5Z'
+                organization:
+                  id: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                  name: Acme QA
+                  plan: FREE
+                  seatLimit: 5
+                  createdAt: '2026-10-01T08:00:00Z'
+                  myRole: MEMBER
+        '201':
+          description: A new account was created and joined the organization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptInvitationResponse'
+              example:
+                user:
+                  id: 6f1c2a9e-3b7d-4c55-9a10-2f4e8b6d0c31
+                  email: fay@example.com
+                  fullName: Fay Lin
+                  status: PENDING_VERIFICATION
+                  mfaEnabled: false
+                  createdAt: '2026-10-12T09:30:00.123456Z'
+                organization:
+                  id: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                  name: Acme QA
+                  plan: FREE
+                  seatLimit: 5
+                  createdAt: '2026-10-01T08:00:00Z'
+                  myRole: MEMBER
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: '`INVITATION_EMAIL_MISMATCH`: the logged-in account''s email differs from the invitation''s (AC-6.3).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: This invitation was sent to another email address.
+                instance: /api/auth/invitations/q3Xb0v6m1T2cJw8Hk4Zr9Ya5Lp7Nd0Es/accept
+                code: INVITATION_EMAIL_MISMATCH
+        '404':
+          description: '`INVITATION_NOT_FOUND`: no invitation has this token (AC-6.4).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            One of:
+            - `EMAIL_ALREADY_REGISTERED`: anonymous caller, but the invitation's email already has an account (AC-6.5),
+              also when another request registers that email at the same moment (AC-2.11);
+            - `ALREADY_MEMBER`: the account is already a member of the organization (AC-6.7);
+            - `SEAT_LIMIT_REACHED`: the organization has no free seat (AC-6.9);
+            - `CONFLICT`: another request changed the same data at the same time, or a lock couldn't be acquired in
+              time (AC-1.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: |
+            `INVITATION_EXPIRED`, `INVITATION_REVOKED` or `INVITATION_ALREADY_ACCEPTED` (AC-6.4, AC-5.9). The loser of
+            two concurrent acceptances of the same token gets `INVITATION_ALREADY_ACCEPTED` (Q5).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Gone
+                status: 410
+                detail: This invitation has been revoked.
+                instance: /api/auth/invitations/q3Xb0v6m1T2cJw8Hk4Zr9Ya5Lp7Nd0Es/accept
+                code: INVITATION_REVOKED
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs:
+    post:
+      tags:
+        - Organizations
+      operationId: createOrganization
+      summary: Create an organization
+      description: |
+        Any authenticated user. The caller becomes its `OWNER`. Plan `FREE`, `seatLimit` from
+        `app.orgs.free-seat-limit` (default 5). Names are 1–100 characters and not blank; duplicate names are allowed
+        (AC-4.1, AC-4.2). The new organization is usable at once with the caller's current token (AC-4.7).
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrganizationRequest'
+            example:
+              name: Globex QA
+      responses:
+        '201':
+          description: Organization created.
+          headers:
+            Location:
+              description: Relative URL of the new organization.
+              schema:
+                type: string
+              example: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+              example:
+                id: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                name: Globex QA
+                plan: FREE
+                seatLimit: 5
+                createdAt: '2026-10-12T09:30:00.123456Z'
+                myRole: OWNER
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags:
+        - Organizations
+      operationId: listMyOrganizations
+      summary: List the organizations I belong to
+      description: |
+        Any authenticated user. Every organization the caller is a member of, with the caller's role in `myRole`,
+        ordered by name. A user without organizations gets `[]` (AC-4.3, AC-4.4). Membership is read from the
+        database, not from the token (AC-4.7, AC-8.2).
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The caller's organizations, ordered by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+              example:
+                - id: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                  name: Acme QA
+                  plan: FREE
+                  seatLimit: 5
+                  createdAt: '2026-10-01T08:00:00Z'
+                  myRole: OWNER
+                - id: 9d2f7c41-1e3b-4a6d-b5c8-3f0a2e7d9b14
+                  name: Initech QA
+                  plan: FREE
+                  seatLimit: 5
+                  createdAt: '2026-10-05T14:12:45.25Z'
+                  myRole: READER
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}:
+    get:
+      tags:
+        - Organizations
+      operationId: getOrganization
+      summary: View one organization
+      description: |
+        Any member (`READER` or above), with the caller's role in `myRole` (AC-4.5). A non-member and an unknown id
+        both get 403 `FORBIDDEN`; a malformed id gets 400 `MALFORMED_REQUEST` (AC-4.6).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The organization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/invitations:
+    post:
+      tags:
+        - Invitations
+      operationId: createInvitation
+      summary: Invite someone by email
+      description: |
+        At least `ADMIN` in the organization (otherwise 403 `FORBIDDEN`), and `role` within the caller's own rank
+        (otherwise 422 `ROLE_CEILING`): an `ADMIN` can't invite an `OWNER`; an `OWNER` can invite any role (AC-5.2).
+
+        - The email is normalised (D12). No email is sent in phase 1: the response returns the acceptance `token`
+          **once**, to the inviter, who shares it out of band. It is never listed and never logged (AC-5.1).
+        - The invitation is `PENDING` and expires 7 days after `createdAt`.
+        - 409 `SEAT_LIMIT_REACHED` when seats used (members + pending unexpired invitations) already equal the seat
+          limit (AC-5.3). An expired invitation doesn't use a seat (AC-5.4).
+        - 409 `ALREADY_MEMBER` when the email belongs to a member (AC-5.5); 409 `INVITATION_PENDING` when a pending,
+          unexpired invitation for that email already exists in the organization (AC-5.6).
+        - An unknown `role` value is 400 `MALFORMED_REQUEST`; a missing or invalid field is 400 `VALIDATION_FAILED`
+          (AC-5.7). A `role` sent as a number or a string of digits (`0`, `"3"`) is 400 `MALFORMED_REQUEST` (AC-5.11).
+        - Two concurrent invitations for the last seat can't both succeed: one gets 409 `SEAT_LIMIT_REACHED`.
+
+        **Which error wins (Q6):** request validation (400, before authorization, A3); then 403 `FORBIDDEN` (not a
+        member, or below `ADMIN`); then 422 `ROLE_CEILING`; then 409 `ALREADY_MEMBER`; then 409 `INVITATION_PENDING`;
+        then 409 `SEAT_LIMIT_REACHED`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteMemberRequest'
+            example:
+              email: Fay@Example.com
+              role: MEMBER
+      responses:
+        '201':
+          description: Invitation created. The only response that ever contains the acceptance token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedInvitation'
+              example:
+                id: 2c7e9f10-4b3a-4d8e-a1f6-5e0d3c9b8a72
+                email: fay@example.com
+                role: MEMBER
+                status: PENDING
+                createdAt: '2026-10-12T09:30:00.123456Z'
+                expiresAt: '2026-10-19T09:30:00.123456Z'
+                token: q3Xb0v6m1T2cJw8Hk4Zr9Ya5Lp7Nd0Es
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `SEAT_LIMIT_REACHED`, `ALREADY_MEMBER`, `INVITATION_PENDING`, or `CONFLICT` for a concurrent change or a lock
+            that couldn't be acquired in time (AC-1.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: The organization has no free seat.
+                instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/invitations
+                code: SEAT_LIMIT_REACHED
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/RoleCeiling'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags:
+        - Invitations
+      operationId: listPendingInvitations
+      summary: List pending invitations
+      description: |
+        At least `ADMIN` (otherwise 403 `FORBIDDEN`). Only `PENDING` invitations whose `expiresAt` is in the future,
+        ordered by creation time. Items never contain the acceptance token (AC-5.8).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: Pending, unexpired invitations, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Invitation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/invitations/{invitationId}:
+    delete:
+      tags:
+        - Invitations
+      operationId: revokeInvitation
+      summary: Revoke a pending invitation
+      description: |
+        At least `ADMIN` (otherwise 403 `FORBIDDEN`). Sets the invitation to `REVOKED`: its seat is freed and its
+        token stops working (accepting it then gives 410 `INVITATION_REVOKED`, AC-5.9). An unknown id, or an id that
+        belongs to another organization, is 404 `INVITATION_NOT_FOUND`; an `ACCEPTED` or `REVOKED` invitation is 409
+        `INVITATION_NOT_PENDING` (AC-5.10). A `PENDING` invitation whose `expiresAt` has passed can still be revoked:
+        `204`, and it becomes `REVOKED` (Q4).
+
+        **Role ceiling (AC-5.12):** the caller may revoke only invitations whose role ranks at most their own;
+        otherwise 422 `ROLE_CEILING` and the invitation stays pending. So an `ADMIN` can't revoke an `OWNER`
+        invitation, expired or not; an `OWNER` can revoke any invitation.
+
+        **Which error wins (D13):** 403 `FORBIDDEN`; then 404 `INVITATION_NOT_FOUND`; then 409
+        `INVITATION_NOT_PENDING`; then 422 `ROLE_CEILING`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - name: invitationId
+          in: path
+          required: true
+          description: The invitation's `id`.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '204':
+          description: Revoked.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`INVITATION_NOT_FOUND`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: '`INVITATION_NOT_PENDING`, or `CONFLICT` when a lock couldn''t be acquired in time (AC-1.9).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/RoleCeiling'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/members:
+    get:
+      tags:
+        - Members
+      operationId: listMembers
+      summary: List members
+      description: |
+        Any member (`READER` or above); otherwise 403 `FORBIDDEN`. Ordered by email. Items never contain a password or
+        its hash (AC-7.1).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The members, ordered by email.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Member'
+              example:
+                - userId: 6a0e2b4c-8d1f-4e3a-9b5c-7d2e0f1a3b46
+                  email: ana@example.com
+                  fullName: Ana Lima
+                  role: OWNER
+                  joinedAt: '2026-10-01T08:00:00Z'
+                - userId: 1f3d5b7a-9c2e-4a6b-8d0f-2e4c6a8b0d13
+                  email: ben@example.com
+                  fullName: Ben Ode
+                  role: ADMIN
+                  joinedAt: '2026-10-02T10:20:30.5Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/members/{userId}:
+    patch:
+      tags:
+        - Members
+      operationId: changeMemberRole
+      summary: Change a member's role
+      description: |
+        At least `ADMIN` (otherwise 403 `FORBIDDEN`), within the role ceiling: the target's current role and the new
+        role must both have a rank at most the caller's (otherwise 422 `ROLE_CEILING`, AC-7.2). Nobody can change
+        their own role (422 `SELF_ROLE_CHANGE`, AC-7.3); ownership is handed over by making someone else `OWNER`.
+        The target must be a member (404 `MEMBER_NOT_FOUND`, AC-7.4). Setting the role a member already has is a
+        successful no-op (AC-7.7). The change applies to the target's next request, whatever their token says (AC-7.6).
+        An unknown `role` value is 400 `MALFORMED_REQUEST`; a missing `role` is 400 `VALIDATION_FAILED` (AC-7.5). A
+        `role` sent as a number or a string of digits (`1`, `"2"`) is 400 `MALFORMED_REQUEST` and nothing changes
+        (AC-7.8).
+
+        **Which error wins (Q6):** request validation (400); then 403 `FORBIDDEN` (not a member; or, when the target
+        isn't the caller, below `ADMIN`); then 404 `MEMBER_NOT_FOUND`; then 422 `SELF_ROLE_CHANGE`; then 422
+        `ROLE_CEILING`. So a member of any role who targets themselves gets `SELF_ROLE_CHANGE`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeMemberRoleRequest'
+            example:
+              role: ADMIN
+      responses:
+        '200':
+          description: The member with the new role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/MemberNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: '`CONFLICT`: a lock couldn''t be acquired in time (AC-1.9).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: '`ROLE_CEILING` or `SELF_ROLE_CHANGE`.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Unprocessable Content
+                status: 422
+                detail: You can't change your own role.
+                instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/members/6a0e2b4c-8d1f-4e3a-9b5c-7d2e0f1a3b46
+                code: SELF_ROLE_CHANGE
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - Members
+      operationId: removeMember
+      summary: Remove a member, or leave
+      description: |
+        **Leave:** any member can remove themselves (`userId` = the caller's id), whatever their role (AC-8.3),
+        except the last `OWNER` (409 `LAST_OWNER`, AC-8.4).
+
+        **Remove someone else:** at least `ADMIN` (otherwise 403 `FORBIDDEN`), and the target's role must have a rank
+        at most the caller's (otherwise 422 `ROLE_CEILING`, AC-8.1). The target must be a member (404
+        `MEMBER_NOT_FOUND`, AC-8.5).
+
+        A non-member caller gets 403 `FORBIDDEN`. Removal frees a seat (AC-8.6) and takes effect on the removed user's
+        next request (AC-8.2). Two owners leaving at the same time can't leave the organization without an owner: one
+        gets 409 `LAST_OWNER`.
+
+        **Which error wins (Q6):** 403 `FORBIDDEN` (not a member; or, when the target isn't the caller, below
+        `ADMIN`); then 404 `MEMBER_NOT_FOUND`; then 422 `ROLE_CEILING` (removing someone else); then 409 `LAST_OWNER`
+        (leaving).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '204':
+          description: Removed (or left).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/MemberNotFound'
+        '409':
+          description: |
+            `LAST_OWNER`: the caller is the only `OWNER` and tried to leave; or `CONFLICT` when a lock couldn't be
+            acquired in time (AC-1.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/RoleCeiling'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/projects:
+    post:
+      tags:
+        - Projects
+      operationId: createProject
+      summary: Create a project
+      description: |
+        Organization `OWNER` or `ADMIN` (otherwise 403 `FORBIDDEN`, AC-1.2). The caller is implicit project `ADMIN`, so
+        `myRole` is `ADMIN` and the new project has no explicit members (AC-1.1). The name is stored trimmed (AC-1.8)
+        and must be unique in the organization, archived projects included, compared after trimming and lower-casing
+        (409 `PROJECT_NAME_TAKEN`, AC-1.4); another organization may use the same name (AC-1.5). An unknown
+        organization and one the caller doesn't belong to both get 403 `FORBIDDEN` (AC-1.6). Of simultaneous creations
+        with one name, exactly one succeeds and every other one gets 409 `PROJECT_NAME_TAKEN` (AC-1.7).
+
+        **Which error wins:** request validation (400, AC-1.3); then 403 `FORBIDDEN`; then 409 `PROJECT_NAME_TAKEN`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+            example:
+              name: Mobile App
+      responses:
+        '201':
+          description: Project created.
+          headers:
+            Location:
+              description: Relative URL of the new project, `/api/orgs/{orgId}/projects/{id}` (C4).
+              schema:
+                type: string
+              example: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/projects/5d3c1b7e-2a4f-4e6d-9c8b-1f0e3d2a7b95
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+              example:
+                id: 5d3c1b7e-2a4f-4e6d-9c8b-1f0e3d2a7b95
+                orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                name: Mobile App
+                createdAt: '2026-10-13T09:30:00.123456Z'
+                archivedAt: null
+                myRole: ADMIN
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_NAME_TAKEN`: another project in the organization has that name (AC-1.4, AC-1.7); or `CONFLICT` when
+            a lock couldn't be acquired in time (AC-1.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: Another project in this organization already has this name.
+                instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/projects
+                code: PROJECT_NAME_TAKEN
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags:
+        - Projects
+      operationId: listProjects
+      summary: List the organization's projects I have access to
+      description: |
+        Any member of the organization (`READER` or above); otherwise 403 `FORBIDDEN`. Returns only the projects where
+        the caller has an effective project role, each with `myRole`, ordered by name (case-insensitive), then by id. A
+        member without access to any project gets `[]` (AC-2.1). Archived projects are listed, with their `archivedAt`
+        (AC-2.4).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The projects the caller has access to, ordered by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+              example:
+                - id: 7a1e5c3d-9b2f-4d8a-a6e0-3c5b7d9f1e24
+                  orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                  name: Billing
+                  createdAt: '2026-10-02T10:00:00Z'
+                  archivedAt: '2026-10-13T08:15:42.5Z'
+                  myRole: ADMIN
+                - id: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                  orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                  name: Checkout
+                  createdAt: '2026-10-01T09:00:00Z'
+                  archivedAt: null
+                  myRole: ADMIN
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/projects/{projectId}:
+    get:
+      tags:
+        - Projects
+      operationId: getProject
+      summary: View one project
+      description: |
+        Has access (any effective project role), with the caller's effective role in `myRole` (AC-2.2). Archived
+        projects stay readable (AC-3.5). No access, an unknown project and a project of another organization all get
+        403 `FORBIDDEN`; a malformed id gets 400 `MALFORMED_REQUEST` (AC-2.3).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+              example:
+                id: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                name: Checkout
+                createdAt: '2026-10-01T09:00:00Z'
+                archivedAt: null
+                myRole: TESTER
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags:
+        - Projects
+      operationId: renameProject
+      summary: Rename a project
+      description: |
+        Effective project `ADMIN` (otherwise 403 `FORBIDDEN`, AC-3.1). The same name rules as creation: stored
+        trimmed, unique in the organization (409 `PROJECT_NAME_TAKEN`), except that the project's own name in another
+        letter case is allowed (AC-3.2). An archived project can't be renamed (409 `PROJECT_ARCHIVED`, AC-3.6). Only
+        `name` can change; archive and restore are separate operations.
+
+        **Which error wins:** request validation (400, AC-3.3); then 403 `FORBIDDEN`; then 409 `PROJECT_ARCHIVED`; then
+        409 `PROJECT_NAME_TAKEN`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameProjectRequest'
+            example:
+              name: Checkout Web
+      responses:
+        '200':
+          description: The renamed project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_ARCHIVED` (AC-3.6), `PROJECT_NAME_TAKEN` (AC-3.2), or `CONFLICT` when a lock couldn't be acquired
+            in time (AC-1.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: The project is archived. Restore it first.
+                instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                code: PROJECT_ARCHIVED
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/projects/{projectId}/archive:
+    post:
+      tags:
+        - Projects
+      operationId: archiveProject
+      summary: Archive a project
+      description: |
+        Effective project `ADMIN` (otherwise 403 `FORBIDDEN`, AC-3.4). Sets `archivedAt`. The project stays visible and
+        readable to everyone with access, but becomes read-only until it is restored (AC-3.5, AC-3.6). The access check
+        reports it as `archived: true` (AC-7.4). Idempotent: archiving an archived project is 200 with the unchanged
+        `archivedAt` (AC-3.8). No request body.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The archived project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+              example:
+                id: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                name: Checkout
+                createdAt: '2026-10-01T09:00:00Z'
+                archivedAt: '2026-10-13T09:30:00.123456Z'
+                myRole: ADMIN
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: '`CONFLICT`: a lock couldn''t be acquired in time (AC-1.9).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/projects/{projectId}/restore:
+    post:
+      tags:
+        - Projects
+      operationId: restoreProject
+      summary: Restore an archived project
+      description: |
+        Effective project `ADMIN` (otherwise 403 `FORBIDDEN`, AC-3.7). Clears `archivedAt`, so the project can change
+        again. Idempotent: restoring an active project is 200 with `archivedAt` null (AC-3.8). No request body.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The restored project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: '`CONFLICT`: a lock couldn''t be acquired in time (AC-1.9).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/projects/{projectId}/members:
+    get:
+      tags:
+        - Project members
+      operationId: listProjectMembers
+      summary: List a project's explicit members
+      description: |
+        Has access (any effective project role); otherwise 403 `FORBIDDEN` (AC-4.1). Explicit members only, ordered by
+        email. Implicit admins (organization `OWNER` and `ADMIN`) appear only if they also have an explicit membership.
+        Items never contain a password or its hash. Archived projects stay readable (AC-3.5).
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The explicit members, ordered by email.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectMember'
+              example:
+                - userId: 4b6d8f0a-2c4e-4a6b-9d1f-3e5a7c9b1d28
+                  email: cai@example.com
+                  fullName: Cai Ng
+                  role: ADMIN
+                  joinedAt: '2026-10-01T09:05:00Z'
+                - userId: 8e0a2c4d-6f1b-4d3e-a5c7-9b1d3f5a7c40
+                  email: hal@example.com
+                  fullName: Hal Ito
+                  role: TESTER
+                  joinedAt: '2026-10-03T11:45:10.25Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+        - Project members
+      operationId: addProjectMember
+      summary: Add an organization member to the project
+      description: |
+        Effective project `ADMIN` (otherwise 403 `FORBIDDEN`, AC-4.3). The user must be a current member of the
+        project's organization: a non-member and an unknown user id both get 422 `NOT_ORG_MEMBER` (AC-4.4). The user
+        must not already be an explicit member (409 `ALREADY_MEMBER`, AC-4.5), and `role` must be within the cap of
+        their organization role: an organization `READER` can only be a project `READER` (422
+        `PROJECT_ROLE_NOT_ALLOWED`, AC-4.6). The new member has access at once, with the token they already hold
+        (AC-4.2). It uses no organization seat (AC-4.8). An implicit admin can also be added explicitly and keeps
+        effective `ADMIN` (AC-4.9). An archived project can't change (409 `PROJECT_ARCHIVED`, AC-3.6). Of two
+        simultaneous adds of one user, one succeeds and the other gets 409 `ALREADY_MEMBER`, never a 500.
+
+        A missing `userId` or `role` is 400 `VALIDATION_FAILED`; an unknown `role` (including `OWNER`), a `role` sent as
+        a number, or a `userId` that isn't a UUID is 400 `MALFORMED_REQUEST` (AC-4.7).
+
+        **Which error wins (D6):** request validation (400); then 403 `FORBIDDEN`; then 409 `PROJECT_ARCHIVED`; then 422
+        `NOT_ORG_MEMBER`; then 409 `ALREADY_MEMBER`; then 422 `PROJECT_ROLE_NOT_ALLOWED`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddProjectMemberRequest'
+            example:
+              userId: 2d4f6a8c-0e1b-4c3d-b5e7-9f1a3c5e7b62
+              role: TESTER
+      responses:
+        '201':
+          description: The new project member.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMember'
+              example:
+                userId: 2d4f6a8c-0e1b-4c3d-b5e7-9f1a3c5e7b62
+                email: ivy@example.com
+                fullName: Ivy Moss
+                role: TESTER
+                joinedAt: '2026-10-13T09:30:00.123456Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_ARCHIVED` (AC-3.6), `ALREADY_MEMBER` (AC-4.5), or `CONFLICT` when a lock couldn't be acquired in
+            time (AC-1.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: '`NOT_ORG_MEMBER` (AC-4.4) or `PROJECT_ROLE_NOT_ALLOWED` (AC-4.6).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Unprocessable Content
+                status: 422
+                detail: Only members of the project's organization can be added.
+                instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/members
+                code: NOT_ORG_MEMBER
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/orgs/{orgId}/projects/{projectId}/members/{userId}:
+    patch:
+      tags:
+        - Project members
+      operationId: changeProjectMemberRole
+      summary: Change a project member's role
+      description: |
+        Effective project `ADMIN` (otherwise 403 `FORBIDDEN`, AC-5.1). The target must be an explicit member of the
+        project; an implicit admin without a membership, a non-member and an unknown id get 404 `MEMBER_NOT_FOUND`
+        (AC-5.3). Nobody can change their own project role, whatever their role (422 `SELF_ROLE_CHANGE`, AC-5.2). The
+        new role must be within the cap of the target's organization role (422 `PROJECT_ROLE_NOT_ALLOWED`, AC-5.4).
+        Setting the role a member already has is a successful no-op (AC-5.10). The change applies to the target's next
+        request (AC-5.5). An archived project can't change (409 `PROJECT_ARCHIVED`, AC-3.6). `role` follows the same
+        400 rules as in `addProjectMember`.
+
+        **Which error wins (D6):** request validation (400); then 403 `FORBIDDEN` (no access; or, when the target isn't
+        the caller, below effective `ADMIN`); then 409 `PROJECT_ARCHIVED`; then 404 `MEMBER_NOT_FOUND`; then 422
+        `SELF_ROLE_CHANGE`; then 422 `PROJECT_ROLE_NOT_ALLOWED`. So an explicit member of any role who targets
+        themselves gets `SELF_ROLE_CHANGE`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/XRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeProjectMemberRoleRequest'
+            example:
+              role: MEMBER
+      responses:
+        '200':
+          description: The member with the new role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/ProjectMemberNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: '`PROJECT_ARCHIVED` (AC-3.6), or `CONFLICT` when a lock couldn''t be acquired in time (AC-1.9).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: '`SELF_ROLE_CHANGE` (AC-5.2) or `PROJECT_ROLE_NOT_ALLOWED` (AC-5.4).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: about:blank
+                title: Unprocessable Content
+                status: 422
+                detail: This role is above what the member's organization role allows.
+                instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/members/9c1e3a5b-7d2f-4b6a-8e0c-2a4c6e8a0b57
+                code: PROJECT_ROLE_NOT_ALLOWED
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+        - Project members
+      operationId: removeProjectMember
+      summary: Remove a project member, or leave the project
+      description: |
+        **Leave:** any explicit member can remove themselves (`userId` = the caller's id), whatever their project role
+        (AC-5.7). There is no "last project admin" rule: organization owners and admins stay implicit admins.
+
+        **Remove someone else:** effective project `ADMIN` (otherwise 403 `FORBIDDEN`, AC-5.6). The target must be an
+        explicit member (404 `MEMBER_NOT_FOUND`); implicit admins have no membership to remove (AC-5.9).
+
+        The removed user loses access on their next request (AC-5.8, AC-7.5), unless they are an implicit admin. An
+        archived project can't change, leaving included (409 `PROJECT_ARCHIVED`, AC-3.6).
+
+        **Which error wins (D6):** 403 `FORBIDDEN` (no access; or, when the target isn't the caller, below effective
+        `ADMIN`); then 409 `PROJECT_ARCHIVED`; then 404 `MEMBER_NOT_FOUND`.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '204':
+          description: Removed (or left).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/ProjectMemberNotFound'
+        '409':
+          description: '`PROJECT_ARCHIVED` (AC-3.6), or `CONFLICT` when a lock couldn''t be acquired in time (AC-1.9).'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /internal/projects/{projectId}/access:
+    get:
+      tags:
+        - Project access check
+      operationId: checkProjectAccess
+      summary: The caller's effective role in a project (service-to-service)
+      x-internal: true
+      description: |
+        **Service-to-service (contract C5, phase-2 D9).** Other services (scenario-service, report-service) call this
+        directly on auth-service's base URL (`AUTH_SERVICE_URL`; `http://localhost:8081` locally). The gateway never
+        routes `/internal/**`: through it this path is the gateway's 404 Problem, without `code` (AC-7.6).
+
+        **Request:** forward the end user's `Authorization: Bearer <jwt>` header unchanged. No service credential is
+        needed: every phase-2 use is on behalf of a logged-in user. A missing, expired or wrongly signed token is 401
+        `UNAUTHENTICATED` with `WWW-Authenticate: Bearer` (AC-7.3).
+
+        **Answer:** 200 with exactly `projectId`, `orgId`, `role` (the caller's effective project role, computed from the
+        database on every request) and `archived` when the caller has access (AC-7.1, AC-7.4). No access, an unknown
+        project and a project of another organization all get 403 `FORBIDDEN`, so ids can't be probed (AC-7.2). A
+        malformed id is 400 `MALFORMED_REQUEST`. A removal or demotion is visible on the next request (AC-7.5).
+
+        **Consumer rules** (each consumer's spec repeats them):
+        - compare `role` by rank (`ADMIN` > `MEMBER` > `TESTER` > `READER`), never by string order;
+        - refuse content writes when `archived` is true;
+        - treat a timeout or a 5xx as "deny" (fail closed);
+        - don't cache the answer, unless the consumer's spec accepts a staleness window of at most 30 s, documented as
+          a known delay for removals.
+
+        **Stability:** fields are only ever added; a breaking change needs a new path.
+      servers:
+        - url: http://localhost:8081
+          description: Direct to auth-service. Not routed by the gateway.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          description: The project's id. A value that isn't a UUID is 400 `MALFORMED_REQUEST`.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The caller has access.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectAccess'
+              example:
+                projectId: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                orgId: 0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60
+                role: ADMIN
+                archived: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v3/api-docs:
+    get:
+      tags:
+        - Tooling
+      operationId: getRuntimeApiDocs
+      summary: Runtime OpenAPI document (springdoc)
+      description: |
+        Public, on the service port only (AC-3.7); not routed by the gateway. Generated from the code by springdoc
+        and **not** the contract: this file is.
+      security: []
+      servers:
+        - url: http://localhost:8081
+      responses:
+        '200':
+          description: The generated OpenAPI document.
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT from `POST /api/auth/login` (`accessToken`), contract C2. auth-service validates it itself on every
+        protected request, with the same rule as the gateway:
+
+        - Header: `Authorization: Bearer <jwt>`; a valid token authenticates the request (AC-3.2). The scheme is
+          matched case-insensitively (`bearer` works, AC-3.3). Rejected tokens are never logged (AC-3.8).
+        - Algorithm: HS512 only. HS256/HS384 tokens, unsigned (`alg: none`), tampered and wrongly signed tokens are
+          rejected (AC-3.1).
+        - Key: the shared secret `JWT_SECRET` (setting `app.jwtSecret`), the standard Base64 encoding of at least 64
+          bytes. The service refuses to start without a usable secret (AC-3.9).
+        - Required claims: `sub` (the user's UUID) and `exp` (in the future, no clock skew).
+        - Informational claims: `email`, `orgs` (`[{"orgId": "<uuid>", "role": "<OrganizationRole>"}]`), `mfa`
+          (boolean), and `iat`. `orgs` is a snapshot taken at login: never use it for authorization decisions.
+        - Lifetime: 24 hours (`exp` − `iat` = 86400 s). There is no refresh or logout in phase 1.
+        - The user must still exist and must not be `SUSPENDED` (AC-3.4, AC-3.5).
+        - Missing or invalid credentials: 401 `UNAUTHENTICATED` with `WWW-Authenticate: Bearer`.
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: |
+        Optional request ID (the gateway always sends one). When it matches the pattern, Problem bodies echo it in
+        `requestId`; otherwise it is ignored. Never rejected and never returned as a response header.
+      schema:
+        type: string
+      example: rid-123
+    OrgId:
+      name: orgId
+      in: path
+      required: true
+      description: The organization's id. A value that isn't a UUID is 400 `MALFORMED_REQUEST`.
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: The member's user id. A value that isn't a UUID is 400 `MALFORMED_REQUEST`.
+      schema:
+        type: string
+        format: uuid
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: |
+        The project's id. It must belong to the organization in the path; otherwise 403 `FORBIDDEN`, as for an unknown
+        project. A value that isn't a UUID is 400 `MALFORMED_REQUEST`.
+      schema:
+        type: string
+        format: uuid
+  headers:
+    WWWAuthenticate:
+      description: Bearer authentication challenge, on every 401.
+      schema:
+        type: string
+        pattern: '^Bearer'
+      example: Bearer
+  schemas:
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - fullName
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: |
+            Validated as typed, then trimmed and lower-cased before storing. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`).
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: 8 or more characters and at most 72 bytes in UTF-8 (the BCrypt limit; spec A6).
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Stored as sent, so it must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate anywhere, including tabs and line breaks (400 `VALIDATION_FAILED`).
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: |
+            Matched case-insensitively. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`).
+        password:
+          type: string
+          format: password
+          minLength: 1
+          description: |
+            Not length-checked by validation. A password over 72 UTF-8 bytes is answered 401 `INVALID_CREDENTIALS`,
+            like any wrong password (AC-2.10).
+    LoginResponse:
+      type: object
+      required:
+        - accessToken
+      properties:
+        accessToken:
+          type: string
+          minLength: 1
+          description: HS512 JWT; see the `bearerAuth` security scheme.
+    AcceptInvitationRequest:
+      type: object
+      description: The new account's details; the email comes from the invitation.
+      required:
+        - password
+        - fullName
+      properties:
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: 8 or more characters and at most 72 bytes in UTF-8.
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Stored as sent, so it must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate anywhere, including tabs and line breaks (400 `VALIDATION_FAILED`).
+    AcceptInvitationResponse:
+      type: object
+      required:
+        - user
+        - organization
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        organization:
+          $ref: '#/components/schemas/Organization'
+    CreateOrganizationRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Duplicates are allowed. Stored as sent, so it must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate anywhere, including tabs and line breaks (400 `VALIDATION_FAILED`).
+    InviteMemberRequest:
+      type: object
+      required:
+        - email
+        - role
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: |
+            Validated as typed, then trimmed and lower-cased. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`).
+        role:
+          $ref: '#/components/schemas/OrganizationRole'
+    ChangeMemberRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          $ref: '#/components/schemas/OrganizationRole'
+    User:
+      type: object
+      description: An account. Never contains the password or its hash.
+      required:
+        - id
+        - email
+        - fullName
+        - status
+        - mfaEnabled
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          description: Lower-case.
+        fullName:
+          type: string
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        mfaEnabled:
+          type: boolean
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    Organization:
+      type: object
+      required:
+        - id
+        - name
+        - plan
+        - seatLimit
+        - createdAt
+        - myRole
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        plan:
+          type: string
+          enum:
+            - FREE
+            - TEAM
+            - ENTERPRISE
+          description: Always `FREE` for organizations created in phase 1.
+        seatLimit:
+          type:
+            - integer
+            - 'null'
+          format: int32
+          minimum: 0
+          description: Maximum seats (members + pending unexpired invitations). `null` means unlimited.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        myRole:
+          $ref: '#/components/schemas/OrganizationRole'
+    Invitation:
+      type: object
+      description: A pending invitation as listed. Never contains the acceptance token.
+      required:
+        - id
+        - email
+        - role
+        - status
+        - createdAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          description: Lower-case.
+        role:
+          $ref: '#/components/schemas/OrganizationRole'
+        status:
+          $ref: '#/components/schemas/InvitationStatus'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+    CreatedInvitation:
+      description: The create-invitation response, the only one that contains the acceptance token.
+      allOf:
+        - $ref: '#/components/schemas/Invitation'
+        - type: object
+          required:
+            - token
+          properties:
+            token:
+              type: string
+              minLength: 32
+              pattern: '^[A-Za-z0-9_-]+$'
+              description: The acceptance token, at least 32 URL-safe characters. Shown once; share it out of band.
+    Member:
+      type: object
+      description: A member of an organization. Never contains a password or its hash.
+      required:
+        - userId
+        - email
+        - fullName
+        - role
+        - joinedAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        fullName:
+          type: string
+        role:
+          $ref: '#/components/schemas/OrganizationRole'
+        joinedAt:
+          $ref: '#/components/schemas/Timestamp'
+    OrganizationRole:
+      type: string
+      enum:
+        - OWNER
+        - ADMIN
+        - MEMBER
+        - READER
+      description: |
+        Rank `OWNER` 4 > `ADMIN` 3 > `MEMBER` 2 > `READER` 1. In requests, leading and trailing ASCII whitespace is
+        ignored; otherwise only these exact strings are accepted. Any other value, including a different letter case,
+        a number or a string of digits, is 400 `MALFORMED_REQUEST` (AC-5.11, AC-7.8). Responses always contain the
+        exact strings (FU-7).
+    ProjectRole:
+      type: string
+      enum:
+        - ADMIN
+        - MEMBER
+        - TESTER
+        - READER
+      description: |
+        Rank `ADMIN` 4 > `MEMBER` 3 > `TESTER` 2 > `READER` 1; compare by rank only, never by string or declaration
+        order. Each role includes the ones below it: `READER` reads features, runs and reports; `TESTER` also records
+        manual results; `MEMBER` also edits features and manages runs; `ADMIN` also manages the project and its
+        members. In requests, leading and trailing ASCII whitespace is ignored; otherwise only these exact strings are
+        accepted. Any other value, including the organization-only `OWNER`, a different letter case, a number or a
+        string of digits, is 400 `MALFORMED_REQUEST` (AC-4.7). Responses always contain the exact strings.
+    Project:
+      type: object
+      required:
+        - id
+        - orgId
+        - name
+        - createdAt
+        - archivedAt
+        - myRole
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+          description: The organization the project belongs to.
+        name:
+          type: string
+          description: Trimmed. Unique in the organization, ignoring letter case.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        archivedAt:
+          description: When the project was archived; `null` while it is active. Always present.
+          anyOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+        myRole:
+          $ref: '#/components/schemas/ProjectRole'
+          description: The caller's effective project role.
+    ProjectMember:
+      type: object
+      description: An explicit member of a project. Never contains a password or its hash.
+      required:
+        - userId
+        - email
+        - fullName
+        - role
+        - joinedAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        fullName:
+          type: string
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+          description: The member's explicit project role.
+        joinedAt:
+          $ref: '#/components/schemas/Timestamp'
+    ProjectAccess:
+      type: object
+      description: The access check's answer (contract C5). Fields are only ever added.
+      required:
+        - projectId
+        - orgId
+        - role
+        - archived
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+          description: The caller's effective project role.
+        archived:
+          type: boolean
+          description: When `true`, consumers must refuse content writes.
+    CreateProjectRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+          description: |
+            Not blank: a value made only of whitespace (including U+00A0, U+2007, U+202F) or the invisible characters
+            U+200B, U+200C, U+200D, U+2060, U+FEFF is blank. At most 100 characters, counted as Unicode code points (an
+            emoji counts as one). Stored trimmed; unique in the organization, ignoring case. The length is
+            counted before trimming. The trimmed value must not contain
+            a control character (U+0000 to U+001F or U+007F to U+009F) or a lone surrogate (400 `VALIDATION_FAILED`); characters that trimming removes don't count.
+    RenameProjectRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+          description: The same rules as `CreateProjectRequest.name`.
+    AddProjectMemberRequest:
+      type: object
+      required:
+        - userId
+        - role
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: A current member of the project's organization. A value that isn't a UUID is 400 `MALFORMED_REQUEST`.
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+    ChangeProjectMemberRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          $ref: '#/components/schemas/ProjectRole'
+    UserStatus:
+      type: string
+      enum:
+        - ACTIVE
+        - SUSPENDED
+        - PENDING_VERIFICATION
+      description: New accounts are `PENDING_VERIFICATION`. No API sets `ACTIVE` or `SUSPENDED` in phase 1.
+    InvitationStatus:
+      type: string
+      enum:
+        - PENDING
+        - ACCEPTED
+        - REVOKED
+        - EXPIRED
+      description: |
+        Listed invitations are always `PENDING`. Expiry is computed from `expiresAt`; the stored status of an expired
+        invitation may still be `PENDING` (spec A9).
+    Timestamp:
+      type: string
+      format: date-time
+      description: A UTC instant, ISO-8601 with a `Z` offset and 0 to 6 fraction digits (phase-4 D6).
+      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$'
+      example: '2026-10-14T09:30:00.123456Z'
+    ErrorCode:
+      type: string
+      description: The stable machine-readable error code (D2). New codes need a spec change.
+      enum:
+        - VALIDATION_FAILED
+        - MALFORMED_REQUEST
+        - UNAUTHENTICATED
+        - INVALID_CREDENTIALS
+        - FORBIDDEN
+        - INVITATION_EMAIL_MISMATCH
+        - NOT_FOUND
+        - INVITATION_NOT_FOUND
+        - MEMBER_NOT_FOUND
+        - METHOD_NOT_ALLOWED
+        - NOT_ACCEPTABLE
+        - EMAIL_ALREADY_REGISTERED
+        - ALREADY_MEMBER
+        - INVITATION_PENDING
+        - SEAT_LIMIT_REACHED
+        - LAST_OWNER
+        - INVITATION_NOT_PENDING
+        - CONFLICT
+        - INVITATION_EXPIRED
+        - INVITATION_REVOKED
+        - INVITATION_ALREADY_ACCEPTED
+        - UNSUPPORTED_MEDIA_TYPE
+        - ROLE_CEILING
+        - SELF_ROLE_CHANGE
+        - INTERNAL_ERROR
+        - PROJECT_NAME_TAKEN
+        - PROJECT_ARCHIVED
+        - NOT_ORG_MEMBER
+        - PROJECT_ROLE_NOT_ALLOWED
+    Problem:
+      type: object
+      description: |
+        RFC 9457 Problem Details (`application/problem+json`). Compatible with the gateway's `Problem` schema (same
+        base members), plus `code` and, for validation errors, `errors`. `requestId` is optional here: it is present
+        when the request carried a valid `X-Request-Id` header, which is always the case through the gateway. Never
+        contains stack traces, exception class names, SQL, or internal hosts or ports.
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+          description: Always `about:blank`.
+          example: about:blank
+        title:
+          type: string
+          description: The HTTP reason phrase for `status`.
+          example: Bad Request
+        status:
+          type: integer
+          format: int32
+          description: The HTTP status code, equal to the response status.
+          example: 400
+        detail:
+          type: string
+          minLength: 1
+          description: Human-readable explanation. Always non-empty; the wording is not part of the contract.
+          example: The request has invalid fields.
+        instance:
+          type: string
+          description: The request path, without the query string.
+          example: /api/auth/register
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        errors:
+          type: array
+          description: Only on `VALIDATION_FAILED`. One entry per failed constraint, sorted by `field`.
+          items:
+            $ref: '#/components/schemas/InvalidField'
+        requestId:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,128}$'
+          description: The request's `X-Request-Id`, when it was present and valid.
+          example: rid-123
+    InvalidField:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: The request body field (or parameter) name, for example `email`.
+          example: email
+        message:
+          type: string
+          description: Human-readable reason; the wording is not part of the contract.
+          example: Invalid email format
+  responses:
+    BadRequest:
+      description: |
+        `VALIDATION_FAILED` (Bean Validation failure; the body has `errors`; a `null` string field is also
+        `VALIDATION_FAILED`), or `MALFORMED_REQUEST` (unreadable JSON, a JSON number or boolean where a string belongs,
+        an unknown enum value such as an unknown `role` or a `role` sent as a number, or a path id that isn't a
+        canonical UUID: 8-4-4-4-12 hexadecimal digits, upper case accepted).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            validationFailed:
+              value:
+                type: about:blank
+                title: Bad Request
+                status: 400
+                detail: The request has invalid fields.
+                instance: /api/auth/register
+                code: VALIDATION_FAILED
+                errors:
+                  - field: email
+                    message: Invalid email format
+                  - field: fullName
+                    message: Full name cannot be blank
+                  - field: password
+                    message: Password must be at least 8 characters long
+            malformedRequest:
+              value:
+                type: about:blank
+                title: Bad Request
+                status: 400
+                detail: The request could not be read.
+                instance: /api/auth/login
+                code: MALFORMED_REQUEST
+    Unauthenticated:
+      description: |
+        `UNAUTHENTICATED`: missing header, another scheme, or a token that isn't valid (signature, algorithm, expiry,
+        `sub`), or whose user no longer exists or is suspended. Through the gateway, the gateway answers this first
+        with its own 401 Problem (no `code`).
+      headers:
+        WWW-Authenticate:
+          $ref: '#/components/headers/WWWAuthenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unauthorized
+            status: 401
+            detail: A valid bearer token is required.
+            instance: /api/orgs
+            code: UNAUTHENTICATED
+    Forbidden:
+      description: |
+        `FORBIDDEN`: the caller isn't a member of the organization, the organization doesn't exist, or the caller's
+        role is too low for the operation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Forbidden
+            status: 403
+            detail: You are not allowed to perform this operation.
+            instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/invitations
+            code: FORBIDDEN
+    MemberNotFound:
+      description: '`MEMBER_NOT_FOUND`: the target user isn''t a member of this organization (or doesn''t exist).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ProjectForbidden:
+      description: |
+        `FORBIDDEN`: the caller has no access to the project or their effective project role is too low; or the
+        project doesn't exist or belongs to another organization. Every case gets the same answer, so ids can't be
+        probed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Forbidden
+            status: 403
+            detail: You are not allowed to perform this operation.
+            instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+            code: FORBIDDEN
+    ProjectMemberNotFound:
+      description: |
+        `MEMBER_NOT_FOUND`: the target user isn't an explicit member of this project (an implicit admin without a
+        membership, a non-member, or an unknown id).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RoleCeiling:
+      description: '`ROLE_CEILING`: the role involved ranks above the caller''s own role.'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unprocessable Content
+            status: 422
+            detail: You can't grant, change or remove a role above your own.
+            instance: /api/orgs/0b8e4a52-6c1f-4f0e-8d3a-7a2b9c1d5e60/invitations
+            code: ROLE_CEILING
+    NotAcceptable:
+      description: |
+        `NOT_ACCEPTABLE`: the `Accept` header excludes every media type this operation can return. The Problem body is
+        written only when `Accept` allows `application/problem+json`; otherwise the body may be empty.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnsupportedMediaType:
+      description: '`UNSUPPORTED_MEDIA_TYPE`: the request body isn''t `application/json`.'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unsupported Media Type
+            status: 415
+            detail: Content-Type 'text/plain' is not supported.
+            instance: /api/auth/login
+            code: UNSUPPORTED_MEDIA_TYPE
+    OtherClientError:
+      description: |
+        Any other 4xx raised by Spring MVC itself that no explicit response covers (for example a missing required
+        parameter or header). The status is Spring's own; the `code` is `MALFORMED_REQUEST`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InternalError:
+      description: '`INTERNAL_ERROR`: an unexpected failure. The `detail` is fixed and reveals nothing internal.'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Internal Server Error
+            status: 500
+            detail: An unexpected error occurred.
+            instance: /api/orgs
+            code: INTERNAL_ERROR

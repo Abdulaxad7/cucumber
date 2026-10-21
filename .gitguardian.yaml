@@ -1,0 +1,10 @@
+# ggshield / GitGuardian configuration (v2 format).
+# Test fixtures and API-contract examples contain fake credentials on purpose
+# (for example passwords that tests send, forged tokens that tests expect to be rejected,
+# and test-only signing keys). They protect nothing, so they are not scanned.
+# Never add src/main/** or application*.yaml here: real configuration must stay scanned.
+version: 2
+secret:
+  ignored_paths:
+    - "**/src/test/**"
+    - "docs/api/*.openapi.yaml"

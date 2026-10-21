@@ -1,37 +1,59 @@
 package com.example.authservice.security;
 
 import com.example.authservice.enums.ProjectRole;
-import com.example.authservice.model.User;
 import com.example.authservice.service.impl.ProjectRoleService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.cache.annotation.Cacheable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 
-import java.util.Objects;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 
-@Component
+@Component("projectGuard")
 @RequiredArgsConstructor
 public class ProjectGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(ProjectGuard.class);
 
     private final ProjectRoleService projectRoleService;
 
     public boolean hasRole(UUID projectId, Authentication authentication, String role) {
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return false;
-        }
-
-        User user = (User) authentication.getPrincipal();
-        ProjectRole requiredRole = ProjectRole.valueOf(role.toUpperCase());
-
-        ProjectRole userRole = projectRoleService.getRoleForProject(Objects.requireNonNull(user).getId(), projectId);
-
-        return userRole != null && userRole.ordinal() >= requiredRole.ordinal();
+        Optional<ProjectRole> required = parseRole(role);
+        return required.map(projectRole -> callerId(authentication)
+                .flatMap(userId -> projectRoleService.getRoleForProject(userId, projectId))
+                .map(callerRole -> callerRole.isAtLeast(projectRole))
+                .orElse(false)).orElse(false);
     }
 
-    @Cacheable(value = "project-roles", key = "#userId + '-' + #projectId")
-    public ProjectRole getRoleForProject(UUID userId, UUID projectId) {
-        return projectRoleService.getRoleForProject(userId, projectId);
+    public boolean hasRole(UUID orgId, UUID projectId, Authentication authentication, String role) {
+        Optional<ProjectRole> required = parseRole(role);
+        return required.map(projectRole -> callerId(authentication)
+                .flatMap(userId -> projectRoleService.getRoleForProject(userId, orgId, projectId))
+                .map(callerRole -> callerRole.isAtLeast(projectRole))
+                .orElse(false)).orElse(false);
+    }
+
+    private static Optional<UUID> callerId(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication.getPrincipal() instanceof UserPrincipal principal)) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(principal.getId());
+    }
+
+    private static Optional<ProjectRole> parseRole(String role) {
+        if (role == null) {
+            log.warn("Project authorization rule without a role: access denied");
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(ProjectRole.valueOf(role.toUpperCase(Locale.ROOT)));
+        } catch (IllegalArgumentException ex) {
+            log.warn("Project authorization rule with an unknown role: access denied");
+            return Optional.empty();
+        }
     }
 }

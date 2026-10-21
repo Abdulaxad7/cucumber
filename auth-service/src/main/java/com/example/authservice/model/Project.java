@@ -1,11 +1,22 @@
 package com.example.authservice.model;
 
 import jakarta.persistence.*;
-import java.time.LocalDateTime;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
 @Table(name = "projects")
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
 public class Project {
 
     @Id
@@ -16,11 +27,12 @@ public class Project {
     @JoinColumn(name = "org_id", nullable = false)
     private Organization organization;
 
+    @Column(nullable = false, length = 100)
     private String name;
 
-    private String secretToken;
+    @Column(nullable = false)
+    private Instant createdAt;
 
-    private LocalDateTime createdAt;
+    private Instant archivedAt;
 
-    // Getters and Setters
 }

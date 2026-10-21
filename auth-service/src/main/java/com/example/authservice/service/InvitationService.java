@@ -1,11 +1,10 @@
 package com.example.authservice.service;
 
-import com.example.authservice.model.Invitation;
-import com.example.authservice.model.User;
+import com.example.authservice.dto.request.AcceptInvitationRequest;
 
 import java.util.UUID;
 
 public interface InvitationService {
-    Invitation findByToken(String token);
-    void acceptInvitation(String token, User user);
+
+    AcceptInvitationResult accept(String token, UUID callerId, AcceptInvitationRequest newAccount);
 }

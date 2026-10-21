@@ -1,0 +1,532 @@
+openapi: 3.1.0
+info:
+  title: API gateway edge contract
+  version: 0.2.3
+  summary: Conventions every client and downstream service relies on when calling the platform through the API gateway.
+  description: |
+    The API gateway (`api-gateway`) is the single entry point for every API call (spec: `docs/specs/api-gateway.md`).
+
+    This file documents **edge conventions only** (D9). Downstream operations are not copied here; each service
+    documents its own operations in `docs/api/<service>.openapi.yaml`. External paths equal downstream paths: the
+    gateway does no prefix stripping, no path rewriting and no API versioning (D2).
+
+    ## Routes (D2)
+
+    | Route | External path prefix | Target service | Base URL setting | Public operations (no token) | Status |
+    |---|---|---|---|---|---|
+    | auth | `/api/auth/**` | auth-service | `AUTH_SERVICE_URL` | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/invitations/{token}/accept` | Active |
+    | orgs | `/api/orgs` and `/api/orgs/**` | auth-service | `AUTH_SERVICE_URL` | none | Active |
+    | scenarios | `/api/scenarios/**`, `/api/projects/*/features`, `/api/projects/*/features/**`, `/api/projects/*/tags` | scenario-service | `SCENARIO_SERVICE_URL` | none | Active |
+    | reports | `/api/reports/**` | report-service | `REPORT_SERVICE_URL` | none | Provisional placeholder |
+    | (gateway-owned) | `GET /actuator/health` | the gateway itself | — | yes | Active |
+
+    The same table is available in machine-readable form in the `x-routes` extension.
+
+    - Each prefix maps to exactly one service, and prefixes do not overlap.
+    - Placeholder prefixes are provisional. Each service's first spec decides its final prefixes, and renaming a
+      placeholder is not a breaking change because no client uses them.
+    - **Deny by default.** Any path that matches no route returns **401** without a valid token and **404** with one.
+      Authentication is checked before route matching, so anonymous callers cannot discover which routes exist.
+    - auth-service's `/h2-console`, `/swagger-ui/**`, `/v3/api-docs` and `/actuator/**` are not reachable through the
+      gateway. `/api/projects/**` is not routed, except the scenario-service patterns above.
+      `/internal/**` is never routed (auth-service's access check is service-to-service).
+    - The gateway exposes no management endpoint other than `GET /actuator/health`. `/actuator/env`,
+      `/actuator/beans`, `/actuator/configprops`, `/actuator/gateway/**` and the rest follow the deny-by-default rule:
+      404 with a valid token, 401 without one.
+
+    ### Forwarding fidelity (D2)
+
+    "No rewriting" means:
+
+    - **Byte for byte in phase 1:** the method and the path; the request body, for every method and content type
+      (JSON and form-encoded alike); the response status and body, and the response headers except the ones listed
+      below.
+    - **Never moved:** form fields stay in the body. They never move into the query string or the path.
+    - **Changes the gateway may make:**
+      - the headers it owns: `X-Request-Id`, `X-User-Id`, the CORS headers and `Host`;
+      - hop-by-hop and framing headers: `Connection`, `Keep-Alive`, `Transfer-Encoding`, `TE`, `Upgrade`, and
+        `Content-Length` when the body is re-framed;
+      - on responses that don't have them, the security headers `Cache-Control`, `Pragma`, `Expires`,
+        `X-Content-Type-Options`, `X-Frame-Options` and `X-XSS-Protection`. A value set by the service always wins.
+    - **Known phase-1 deviations** (follow-up FU-2). They are semantically equivalent for the current Spring services:
+      - query strings are decoded and re-encoded, so parameter order and valueless parameters can change;
+      - `;charset=UTF-8` is appended to a request `Content-Type` that has no charset;
+      - POST form bodies are re-serialised; the fields and values stay the same;
+      - gzip or deflate responses are decoded;
+      - the downstream HTTP client adds `Accept-Encoding` and h2c upgrade headers.
+    - The gateway replaces `Host`, so services should emit relative `Location` URLs. An absolute URL built from the
+      request would expose an internal host.
+
+    ## Authentication (D4)
+
+    Every operation requires `Authorization: Bearer <jwt>` (see the `bearerAuth` security scheme) except the public
+    operations listed above and preflight (`OPTIONS`) requests. The gateway authenticates but does not authorize:
+    organization and project roles are still checked by the owning service, which also keeps validating the JWT.
+
+    - Protected request with a valid token: forwarded with the original `Authorization` header unchanged.
+    - Protected request with a missing header, a non-`Bearer` scheme, or a malformed, expired, unsigned, tampered or
+      wrongly signed token, or a token whose `sub` isn't 1 or more printable ASCII characters (U+0021–U+007E):
+      **401**, with a `WWW-Authenticate` header whose value starts with `Bearer`. The request never reaches a service.
+    - Protected request with more than one `Authorization` header: **401**, whatever the values are. The request never
+      reaches a service. RFC 9110 allows only one, and a service that read a different copy would authenticate a
+      credential the gateway never checked.
+    - The scheme is matched case-insensitively (RFC 9110 §11.1), so `bearer` is accepted at the gateway. auth-service
+      matches it case-insensitively too (auth-service phase 1, AC-3.3); clients should still send `Bearer`.
+    - Public operation: the token is not evaluated and `Authorization` headers are not counted. Any `Authorization`
+      header is forwarded unchanged and the owning service decides, so a user holding an expired token can still log
+      in again.
+
+    ## Request and response headers (D4, D7)
+
+    | Header | Direction | Rule |
+    |---|---|---|
+    | `X-Request-Id` | client → gateway (optional) | Kept if it matches `^[A-Za-z0-9._-]{1,128}$`; otherwise (including empty) replaced by a generated UUID. A malformed value is replaced, never rejected. |
+    | `X-Request-Id` | gateway → service | Always present: the kept or generated value. |
+    | `X-Request-Id` | gateway → client | Exactly one header on every response, including gateway-generated errors, with the gateway's value. Equals `requestId` in Problem bodies. Any `X-Request-Id` a service sets on its response (in any letter case) is dropped, so services must not rely on setting it. |
+    | `X-User-Id` | client → gateway | Not accepted. Every client-supplied `X-User-Id` header is removed, in any letter case, on public and protected requests. |
+    | `X-User-Id` | gateway → service | Set to the token's `sub` on protected requests only. Informational (logging and attribution): services must not authorize on it; authorization still uses the validated JWT. |
+    | `Authorization` | gateway → service | Forwarded unchanged on every forwarded request. |
+
+    See the `x-downstream-request-headers` extension for the gateway → service header contract (C3).
+
+    ## Errors (D6)
+
+    Responses produced by a downstream service (any status, including 4xx and 5xx) are passed through unchanged:
+    status, headers and body. auth-service's errors are RFC 9457 Problems too, with the same base members plus a
+    stable `code` (and `errors` for validation failures); see `auth-service.openapi.yaml`. The gateway's own errors
+    have no `code` until a platform-wide decision, so clients must handle a Problem without `code`.
+
+    Errors the gateway generates itself use RFC 9457 Problem Details (`application/problem+json`, schema `Problem`):
+
+    | Situation | Status | `title` | Suggested `detail` |
+    |---|---|---|---|
+    | Protected path with a missing, invalid or expired token | 401 | Unauthorized | A valid bearer token is required. |
+    | Valid token, but no route matches the path | 404 | Not Found | No API route matches this path. |
+    | Couldn't connect to the downstream service (connection refused, unknown host, connect timeout) | 503 | Service Unavailable | The service handling this request is unavailable. Try again later. |
+    | Connected, but the response (status line, headers and the whole body) wasn't complete within the response timeout | 504 | Gateway Timeout | The service handling this request did not respond in time. |
+    | The connection dropped before the response was complete, or the response was invalid: a malformed status line, a status code outside 100–599, or a body shorter than its declared length | 502 | Bad Gateway | The service handling this request returned an invalid response. |
+    | CORS request (preflight, or an actual request with an `Origin` header) from an origin that isn't allowed (D5) | 403 | Forbidden | This origin is not allowed to call the API. |
+    | Unexpected failure inside the gateway | 500 | Internal Server Error | Unexpected gateway error. |
+
+    - Timeouts: 2 s to connect (`GATEWAY_CONNECT_TIMEOUT`) and 10 s for the response (`GATEWAY_RESPONSE_TIMEOUT`).
+      The response timeout covers the whole downstream exchange, from sending the request to receiving the last
+      byte of the response body. When it runs out, the client gets 504.
+    - A failure after the response headers arrive is still 502 or 504 according to the table, never 500. 500 is
+      reserved for unexpected failures inside the gateway.
+    - Replays:
+      - the gateway never replays a timed-out request;
+      - it never replays a request whose method isn't GET or HEAD;
+      - a GET or HEAD whose connection closed before any byte of the response arrived may be sent once more, so at
+        most two attempts in total.
+
+      Retrying a connection that was never established is not a replay.
+    - Problem bodies never contain stack traces, exception class names, or downstream URLs, hosts or ports.
+
+    ## CORS (D5)
+
+    The gateway is the only CORS authority; downstream services must not emit CORS headers. The machine-readable
+    policy is in the `x-cors` extension.
+
+    - Allowed origins: exact origins from `CORS_ALLOWED_ORIGINS` (comma-separated, no wildcards). Default: none, so no
+      cross-origin access. The `dev` profile allows `http://localhost:3000` and `http://localhost:5173`.
+    - Allowed methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`.
+    - Allowed request headers: `Authorization, Content-Type, Accept, X-Request-Id`.
+    - Exposed response headers: `X-Request-Id, Location`.
+    - Credentials are not allowed (`Access-Control-Allow-Credentials` is absent); tokens travel in a header, not cookies.
+    - Preflight cache (`Access-Control-Max-Age`): 1800 s.
+    - Preflight requests need no token and are never forwarded to a service.
+    - **Refused CORS requests.** A preflight, or an actual request carrying an `Origin` header, from an origin that is
+      not allowed gets **403** with the `Problem` body (`title` `Forbidden`, with `requestId`), the `X-Request-Id`
+      header and no `Access-Control-Allow-*` headers (response `CorsOriginNotAllowed`). It is never forwarded.
+    - A preflight from an allowed origin that asks for a method or request header outside the policy gets the same
+      403 response. Its `detail` text is the same too; the wording isn't part of the contract.
+    - Gateway-generated errors, including 401, carry CORS headers for allowed origins.
+    - A response always carries at most one `Access-Control-Allow-Origin` header, even if a service sets its own.
+  x-spec: docs/specs/api-gateway.md
+servers:
+  - url: http://localhost:8080
+    description: Local development (gateway port 8080; override with `SERVER_PORT`)
+security:
+  - bearerAuth: []
+tags:
+  - name: Gateway
+    description: Operations served by the gateway itself.
+paths:
+  /actuator/health:
+    get:
+      tags:
+        - Gateway
+      operationId: getGatewayHealth
+      summary: Gateway liveness
+      description: |
+        Public. Reports only the gateway's own status, with no details or components. It does not check downstream
+        services, so a service that is down never marks the gateway unhealthy.
+
+        The media type follows the `Accept` header: `application/json` when the client asks for it, otherwise
+        `application/vnd.spring-boot.actuator.v3+json`. The body is the same in both cases.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+      responses:
+        '200':
+          description: The gateway is up.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: UP
+            application/vnd.spring-boot.actuator.v3+json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: UP
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT issued by auth-service (`POST /api/auth/login`, response field `accessToken`) and validated locally by
+        the gateway, with no call to auth-service (contract C2).
+
+        - Header: exactly one `Authorization: Bearer <jwt>`. Tokens are never accepted in cookies or query
+          parameters. More than one `Authorization` header on a protected operation produces `401`.
+        - Scheme: matched case-insensitively, by the gateway and by auth-service. Clients should send `Bearer`.
+        - Algorithm: HS512 (JWS). Unsigned (`alg: none`) and tampered tokens are rejected.
+        - Key: the shared secret `JWT_SECRET`, the standard Base64 encoding (RFC 4648 §4) of at least 64 bytes, used
+          by both auth-service and the gateway.
+        - Required claims: `sub` and `exp`. `sub` is 1 or more printable ASCII characters (U+0021–U+007E): no spaces,
+          control characters or non-ASCII characters. auth-service issues the user's UUID, which complies. `exp` must
+          be in the future (no clock-skew allowance).
+        - Informational claims, as issued by auth-service: `email`, `orgs` (`[{orgId, role}]`) and `mfa`. The
+          gateway does not use them.
+        - A missing or invalid token on a protected operation produces `401` (`Unauthorized` response).
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: |
+        Optional client-supplied request ID. Kept if it matches the pattern; otherwise (including an empty value) the
+        gateway replaces it with a generated UUID. A malformed value is never rejected.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,128}$'
+      example: fe-2026-10-11.abc_123
+  headers:
+    XRequestId:
+      description: |
+        Request ID: the client's value if it was well-formed, otherwise a UUID generated by the gateway. Exactly one
+        on every response, including gateway-generated errors, and forwarded to the downstream service. A downstream
+        `X-Request-Id` response header is dropped.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,128}$'
+      example: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    WWWAuthenticate:
+      description: Bearer authentication challenge. The value starts with `Bearer`.
+      schema:
+        type: string
+        pattern: '^Bearer'
+      example: Bearer
+  schemas:
+    Problem:
+      type: object
+      description: |
+        RFC 9457 Problem Details body for gateway-generated errors (`application/problem+json`). Never contains stack
+        traces, exception class names, or downstream URLs, hosts or ports.
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - requestId
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+          description: Always `about:blank` for gateway-generated errors.
+          example: about:blank
+        title:
+          type: string
+          description: The HTTP reason phrase for `status`.
+          example: Unauthorized
+        status:
+          type: integer
+          format: int32
+          description: |
+            The HTTP status code (401, 403, 404, 500, 502, 503 or 504).
+
+            Phase-1 deviations, where a gateway response doesn't use this schema yet:
+            - The request firewall's 400 (a non-canonical path such as `/api/auth/./login`) and 405 (a method a
+              gateway endpoint doesn't support, such as `POST /actuator/health`) may carry Spring Boot's default error
+              body instead (follow-up FU-3). They do carry the `X-Request-Id` header.
+            - Requests the servlet container rejects before any gateway code runs (for example an encoded slash or
+              `%00` in the path, or the `TRACE` and `CONNECT` methods) get a container-generated response with no
+              `X-Request-Id` header. They never reach a service.
+            - With a valid token, `GET /error` and `/actuator/health/{liveness,readiness,ping}` don't answer the 404
+              Problem yet (follow-up FU-1). Without a token they answer 401 like any other unrouted path.
+          example: 401
+        detail:
+          type: string
+          minLength: 1
+          description: Human-readable explanation. Always non-empty; the wording is not part of the contract.
+          example: A valid bearer token is required.
+        instance:
+          type: string
+          description: The request path, without the query string.
+          example: /api/orgs
+        requestId:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,128}$'
+          description: Equal to the `X-Request-Id` response header.
+          example: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    Health:
+      type: object
+      description: Gateway status only; no details or components.
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: UP
+      additionalProperties: false
+  responses:
+    Unauthorized:
+      description: |
+        Protected path with a missing, invalid or expired token, or with more than one `Authorization` header
+        (including any unknown path called without a valid token). The request did not reach any service.
+      headers:
+        WWW-Authenticate:
+          $ref: '#/components/headers/WWWAuthenticate'
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unauthorized
+            status: 401
+            detail: A valid bearer token is required.
+            instance: /api/orgs
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    NotFound:
+      description: Valid token, but no route matches the path. The request did not reach any service.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Not Found
+            status: 404
+            detail: No API route matches this path.
+            instance: /api/projects/1
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    CorsOriginNotAllowed:
+      description: |
+        CORS request (a preflight, or an actual request with an `Origin` header) from an origin that is not allowed,
+        or a preflight from an allowed origin that asks for a method or request header outside the policy (D5). The
+        request did not reach any service. The response carries no `Access-Control-Allow-*` headers.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Forbidden
+            status: 403
+            detail: This origin is not allowed to call the API.
+            instance: /api/orgs
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    BadGateway:
+      description: |
+        The connection dropped before the response was complete, or the response from the service was invalid: a
+        malformed status line, a status code outside 100–599, or a body shorter than its declared length. This
+        includes failures after the response headers arrived. Only a GET or HEAD whose connection closed before any
+        response byte arrived may have been sent to the service a second time.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Bad Gateway
+            status: 502
+            detail: The service handling this request returned an invalid response.
+            instance: /api/scenarios/42
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    ServiceUnavailable:
+      description: |
+        Couldn't connect to the downstream service (connection refused, unknown host, or connect timeout of 2 s by
+        default). The request did not reach the service.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Service Unavailable
+            status: 503
+            detail: The service handling this request is unavailable. Try again later.
+            instance: /api/scenarios/42
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    GatewayTimeout:
+      description: |
+        Connected, but the response (status line, headers and the whole body) wasn't complete within the response
+        timeout (10 s by default). Never replayed.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Gateway Timeout
+            status: 504
+            detail: The service handling this request did not respond in time.
+            instance: /api/scenarios/42
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+    InternalServerError:
+      description: Unexpected failure inside the gateway.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Internal Server Error
+            status: 500
+            detail: Unexpected gateway error.
+            instance: /api/orgs
+            requestId: 3f2b8c1e-5d4a-4e7b-9c2d-1a0b9e8f7c6d
+x-routes:
+  - id: auth
+    pathPrefixes:
+      - /api/auth/**
+    service: auth-service
+    baseUrlSetting: AUTH_SERVICE_URL
+    defaultBaseUrl: http://localhost:8081
+    publicOperations:
+      - method: POST
+        path: /api/auth/register
+      - method: POST
+        path: /api/auth/login
+      - method: POST
+        path: /api/auth/invitations/{token}/accept
+    status: active
+    contract: auth-service.openapi.yaml
+    contractNote: Published (follow-up C4 done), version 1.0.0 (auth-service phase 1). The runtime /v3/api-docs on port 8081 is not the contract.
+  - id: orgs
+    pathPrefixes:
+      - /api/orgs
+      - /api/orgs/**
+    service: auth-service
+    baseUrlSetting: AUTH_SERVICE_URL
+    defaultBaseUrl: http://localhost:8081
+    publicOperations: []
+    status: active
+    contract: auth-service.openapi.yaml
+    contractNote: Published (follow-up C4 done), version 1.0.0 (auth-service phase 1). The runtime /v3/api-docs on port 8081 is not the contract.
+  - id: scenarios
+    pathPrefixes:
+      - /api/scenarios/**
+      - /api/projects/*/features
+      - /api/projects/*/features/**
+      - /api/projects/*/tags
+    service: scenario-service
+    baseUrlSetting: SCENARIO_SERVICE_URL
+    defaultBaseUrl: http://localhost:8082
+    publicOperations: []
+    status: active
+    contract: scenario-service.openapi.yaml
+    contractNote: Version 1.0.3 (scenario-service spec D2). /api/scenarios/** is kept for existing gateway tests; scenario-service answers it with 404.
+  - id: reports
+    pathPrefixes:
+      - /api/reports/**
+    service: report-service
+    baseUrlSetting: REPORT_SERVICE_URL
+    defaultBaseUrl: http://localhost:8083
+    publicOperations: []
+    status: provisional
+    contract: report-service.openapi.yaml
+    contractNote: Not defined yet. The prefix is a placeholder until report-service's first spec.
+  - id: gateway-health
+    pathPrefixes:
+      - /actuator/health
+    service: api-gateway
+    publicOperations:
+      - method: GET
+        path: /actuator/health
+    status: active
+    contract: api-gateway.openapi.yaml
+x-downstream-request-headers:
+  Authorization:
+    presence: every forwarded request that carried it
+    rule: Forwarded unchanged (byte for byte).
+  X-Request-Id:
+    presence: every forwarded request
+    rule: The client's value if it matched ^[A-Za-z0-9._-]{1,128}$, otherwise a UUID generated by the gateway.
+  X-User-Id:
+    presence: protected requests only
+    rule: The validated token's sub. Client-supplied values are always removed. Informational only; do not authorize on it.
+x-cors:
+  allowedOriginsSetting: CORS_ALLOWED_ORIGINS
+  allowedOriginsDefault: []
+  allowedOriginsDevProfile:
+    - http://localhost:3000
+    - http://localhost:5173
+  allowedMethods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  allowedHeaders:
+    - Authorization
+    - Content-Type
+    - Accept
+    - X-Request-Id
+  exposedHeaders:
+    - X-Request-Id
+    - Location
+  allowCredentials: false
+  maxAgeSeconds: 1800
+  preflightRequiresToken: false
+  preflightForwarded: false
+  disallowedOriginPreflightStatus: 403
+  refusedRequests:
+    appliesTo: >-
+      Preflight requests, and actual requests with an Origin header, from an origin that is not allowed; and
+      preflight requests from an allowed origin that ask for a method or request header outside the policy.
+    status: 403
+    response: '#/components/responses/CorsOriginNotAllowed'
+    forwarded: false
+    accessControlAllowHeaders: none

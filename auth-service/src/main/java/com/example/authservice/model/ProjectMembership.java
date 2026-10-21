@@ -8,7 +8,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -34,11 +34,11 @@ public class ProjectMembership {
     @JoinColumn(name = "project_id", nullable = false)
     private Project project;
 
+    @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private ProjectRole role;
 
-    private LocalDateTime createdAt;
+    @Column(nullable = false)
+    private Instant createdAt;
 
-    // Getters and Setters
 }
-

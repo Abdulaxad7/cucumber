@@ -1,0 +1,2378 @@
+openapi: 3.1.0
+info:
+  title: scenario-service API
+  version: 1.0.4
+  summary: Gherkin features, their versions and parsed structure, derived test cases and tags, per project.
+  description: |
+    Contract C1 of `docs/specs/scenario-service.md` (phase 1). It documents every operation of decision D2, the
+    request rules (D8–D13), the error format and order (D16), the access check (D3, D4) and the token rules (D6). The
+    paths, status codes, `code` values and the Problem members `parseErrors` and `currentVersion` come from the
+    spec's acceptance criteria (AC-x.y) and are binding. The wording of `detail`, of validation `message` texts and of
+    parse error `message` texts is not part of the contract.
+
+    ## Changes in 1.0.4 (task T15c, 2026-10-19)
+
+    1.0.4: fix round 1; only UTF-8 encoding pragmas; at most 10,000 elements per feature; no shape changes.
+    - A `# encoding:` pragma that names any charset other than UTF-8 is 422 `GHERKIN_INVALID` with exactly one parse
+      error at line 1, column 1: `Only UTF-8 encoding is supported` (AC-1.19; before, 500 or a wrongly decoded text).
+    - A valid text with more than 10,000 elements is 400 `VALIDATION_FAILED` with an `errors` entry for `source`,
+      checked at the new order step 7a (AC-1.20). The definition of an element is in `GherkinSource`.
+    - Scenario and example-row ids are matched on structured values, so names containing separators can't collide
+      (AC-3.15). No rule changes; the earlier implementation could give a 409 `CONFLICT` or keep a row id wrongly.
+    - The access check forwards the caller's token as `Authorization: Bearer <token>` (the scheme normalised to
+      `Bearer`), not the header exactly as sent.
+
+    ## Changes in 1.0.3 (task T14, 2026-10-18)
+
+    1.0.3: synced with the implementation (tasks T3–T13). No shape, path, status or code changes.
+    - `VersionMessage`: trimming removes Unicode-blank characters as the spec's rule T2 defines them (Unicode
+      whitespace, NBSP, U+200B–U+200D, U+2060, U+FEFF). NEL (U+0085) is not among them: it is a control character,
+      so a message with a NEL, even at its end, is 400 `VALIDATION_FAILED` (review point A, pm decision 2026-10-18).
+    - The gateway route of the spec's GE1 is in place (gateway contract 0.2.3). The gateway may reorder query
+      parameters and percent-encode characters such as `@` (`tag=%40smoke`); the decoded values reach
+      scenario-service unchanged.
+
+    ## Changes in 1.0.2 (task T1c, 2026-10-18)
+
+    1.0.2: D20 alignment with auth-service phase 4: ICU case-insensitive path comparison; invisible path parts
+    rejected; ids, `{version}` and `archived` untrimmed; strict string types stated for every string field; 'no
+    Feature' only without parser errors. No shape changes.
+    - `path` uniqueness is compared by ICU root lower case, the same expression as the database's unique index, so
+      `İzmir` collides with `i̇zmir` but not with `izmir` (AC-1.17).
+    - `path` rejects a leading Unicode-blank character, and a segment or a file name made only of such characters;
+      every string field rejects U+0000 and lone surrogates (AC-1.16).
+    - Path ids, `{version}` and `archived` are matched exactly as received; leading or trailing whitespace is 400
+      `MALFORMED_REQUEST` (AC-7.14).
+    - A JSON number (including a fraction) or boolean for `path`, `source` or `message` is 400 `MALFORMED_REQUEST`;
+      `null` stays a validation error (AC-7.15).
+    - The "no Feature" parse error is reported only when the parser reports no error (AC-1.15).
+    - Timestamps are taken from the service clock, in UTC (AC-1.18).
+    - The US-8 logging ACs are now named on the operations they observe (AC-8.1 to AC-8.11, AC-8.14); logging never
+      changes a response.
+
+    ## Changes in 1.0.1 (task T1b, 2026-10-14)
+
+    1.0.1: D19 clarifications; stricter `path`, `tag`, `{version}`, `archived` and `baseVersion`; no shape changes.
+    - `path`: the suffix is exactly lower-case `.feature`, after at least one other character (AC-1.14).
+    - `tag`: `@` plus at least one character, no whitespace or control character, at most 1,000 code points, given at
+      most once (AC-5.7).
+    - `{version}`, `archived` and `baseVersion` have one spelling each; any other is 400 `MALFORMED_REQUEST`
+      (AC-7.12). `{version}` and `archived` are now described as strings with a pattern or enum.
+    - Now stated: when `updatedAt` and `updatedBy` change (AC-3.13, AC-6.9); message trimming (AC-3.14); the
+      "no Feature" parse error (AC-1.13); empty Examples blocks (AC-4.6); each tag listed once (AC-5.8); the tag
+      filter on archived features (AC-6.10); the case-insensitive bearer scheme (AC-7.13).
+
+    ## Implementation status (1.0.3, task T14, 2026-10-18)
+
+    Every operation is implemented (spec tasks T3–T12) and routed through the gateway (T13). This file matches the
+    implementation; the acceptance tests named by AC id in `scenario-service/src/test` cover each operation.
+
+    ## Calling the service
+
+    - **Through the gateway:** `http://localhost:8080` (normal use). The route `scenarios` (spec GE1, task T13)
+      forwards `/api/projects/*/features`, `/api/projects/*/features/**` and `/api/projects/*/tags` to
+      scenario-service. External paths equal service paths; the gateway doesn't rewrite paths, but it may reorder
+      query parameters and percent-encode characters such as `@` (the decoded values are unchanged).
+      - The gateway checks the token first. A missing or invalid token gets the **gateway's** 401 Problem, which has
+        `requestId` but no `code`, and the request never reaches scenario-service.
+      - Every other `/api/projects/**` path (for example `/api/projects/{projectId}` or `/api/projects/1`) isn't
+        routed. With a token, it is the gateway's 404 Problem without `code` (AC-7.11).
+      - The provisional placeholder `/api/scenarios/**` still routes here. scenario-service serves nothing there and
+        answers 404 `NOT_FOUND` (spec D2).
+      - The gateway's own errors (401, 403 for CORS, 404, 502, 503, 504) have no `code`. A gateway 503 means
+        scenario-service itself couldn't be reached. scenario-service's own 503 always has the `code`
+        `ACCESS_CHECK_UNAVAILABLE`.
+    - **Directly:** `http://localhost:8082` (local development and tests only). scenario-service validates every
+      token itself and never trusts identity headers (D6).
+    - There is no runtime API document (no springdoc, spec D18). This file is the contract.
+
+    ## Authentication (D6, C2)
+
+    Every operation needs a valid bearer token. There is no public operation, and unknown paths need a token too.
+    The token rules are under the security scheme `bearerAuth`; the scheme name `Bearer` is matched in any letter
+    case (AC-7.13). A missing or invalid token is 401 `UNAUTHENTICATED`
+    with `WWW-Authenticate: Bearer`, before any access check (AC-7.1).
+
+    ## Authorization (D3, D4, D5)
+
+    - Every request to a project-scoped path asks auth-service which role the caller has in the project: the access
+      check C5 (`GET /internal/projects/{projectId}/access` on auth-service, contract 1.2.1). The caller's token is
+      forwarded as `Authorization: Bearer <token>` (the token unchanged, the scheme normalised to `Bearer` whatever
+      letter case the client sent), and so is the request ID (AC-7.2).
+    - Roles are the caller's **effective** project roles, ranked `ADMIN` 4 > `MEMBER` 3 > `TESTER` 2 > `READER` 1.
+      Organization `OWNER` and `ADMIN` are implicit project `ADMIN`. Each role includes the ones below it.
+    - **No caching:** the role is checked on every request, so a removal or demotion applies to the next request
+      (AC-7.5).
+
+      | Operation | Minimum effective project role | On an archived project |
+      |---|---|---|
+      | List and view features; list versions and read one version; list test cases; tag catalogue | `READER` | Allowed |
+      | Create a feature; save a new version or change the path; archive; restore | `MEMBER` | 409 `PROJECT_ARCHIVED` |
+
+    - `TESTER` has the same rights as `READER` here. `ADMIN` has no extra rights in scenario-service.
+    - No access, a role that is too low, and an unknown project all get the same 403 `FORBIDDEN`, so project ids
+      can't be probed (AC-1.3, AC-2.1, AC-7.6).
+    - The role is checked before the archive state: a `READER` writing to an archived project gets 403, not 409
+      (AC-7.7).
+    - A feature of another project is 404 `FEATURE_NOT_FOUND`, the same as an unknown feature (AC-2.4).
+
+    ### When the access check fails (D4)
+
+    | Answer of the access check | Answer of scenario-service |
+    |---|---|
+    | 200 with a known role, a boolean `archived`, and the requested `projectId` | Proceeds; the role is compared by rank |
+    | 403 | 403 `FORBIDDEN` |
+    | 401 (auth-service rejects the token, for example for a deleted or suspended user) | 401 `UNAUTHENTICATED` with `WWW-Authenticate: Bearer` (AC-7.4) |
+    | No connection, a timeout, any 5xx, any other status, an unreadable body, an unknown role (for example `OWNER`), or another `projectId` | **503 `ACCESS_CHECK_UNAVAILABLE`** (AC-7.3) |
+
+    The service **fails closed**: a 503 request changes nothing. The check has a 1 s connect timeout and a 2 s read
+    timeout and is never retried, so the 503 comes within about 3 s (AC-7.3). The caller isn't denied: the platform
+    is degraded, and clients may retry later.
+
+    ## Gherkin text and parse errors (D7, D8)
+
+    - A feature's content is its Gherkin text (`source`). The text is the source of truth. Everything else
+      (name, description, language, tags, structure, test cases) is derived from it on every save.
+    - **Valid Gherkin** means that the official Cucumber Gherkin parser reports no error **and** the text contains a
+      `Feature`. Anything the parser accepts is accepted: an empty Feature name (`Feature:`), a Feature without
+      scenarios, any Gherkin language (`# language: fr`), Rules (AC-1.11, AC-1.12).
+    - Invalid text is 422 `GHERKIN_INVALID`, and **nothing is stored** (AC-1.4, AC-3.6). The Problem has the member
+      `parseErrors`: one entry per error the parser reports, each with a 1-based `line` and `column` and the
+      parser's `message`, sorted by line, then column (AC-1.5). A column the parser reports as 0 is reported as 1.
+      **Only when the parser reports no error**, a text without a Feature (including whitespace-only or
+      comment-only text) has exactly one entry: line 1, column 1, message `The text has no Feature` (AC-1.13). When
+      the parser reports errors, only its errors are listed, never the "no Feature" entry: `Given a step` alone gives
+      the parser's error at line 1, column 1 (AC-1.15). Field errors are never in `parseErrors`, and Gherkin errors
+      are never in `errors`.
+    - **Stored exactly as sent:** line endings, trailing spaces and a missing final newline come back byte for byte
+      (AC-2.6).
+    - Keywords are returned as written, without trailing whitespace (`Given`, `Soit`, `*`), together with their
+      normalised type from the dialect (`GIVEN`, `WHEN`, `THEN`, `AND`, `BUT`, `ASTERISK`). Names and descriptions are
+      returned as the parser reports them (a description keeps its indentation).
+    - Only the **current version** has a structure. Older versions are available as text only.
+
+    ## Versions and concurrent edits (D9)
+
+    - Creating a feature makes version 1. Every save that changes the text makes the next version (2, 3, …).
+      Versions are immutable and are never deleted.
+    - **Optimistic concurrency:** a save names the version it was based on (`baseVersion`). If that isn't the current
+      version, the save is 409 `VERSION_CONFLICT` with the member `currentVersion`, and nothing changes (AC-3.5). The
+      client reloads, merges and saves again. Of several simultaneous saves on one version, exactly one succeeds and
+      every other one gets `VERSION_CONFLICT`, never a 500 (AC-3.11).
+    - **Unchanged text:** a save whose `source` is byte for byte the current version's text creates no version;
+      `currentVersion` and `updatedAt` stay the same, and the answer is 200 (AC-3.7). `baseVersion` is still checked
+      first.
+    - A save may also change the path. A path change on its own creates no version (AC-3.12).
+    - The base version is a body field, not an `If-Match` header (the gateway's CORS policy doesn't allow
+      `If-Match`).
+
+    ## Stable ids (C6, D9)
+
+    report-service will store results against these ids, so their stability is part of the contract. Every schema
+    property that holds an id says which kind it is, also in the extension `x-id-stability` (`stable` or
+    `unstable`).
+
+    | Id | Stability |
+    |---|---|
+    | Feature `id` | **Stable:** never changes, also through archive and restore. |
+    | Scenario `id` (Background, Scenario, Scenario Outline) | **Stable while matched:** kept when the new version has an element of the same kind (Background; Scenario or Example; Scenario Outline or Scenario Template) with the same name in the same container (the Feature, or a Rule with the same name). With duplicate names, the n-th old element matches the n-th new one. Otherwise the element gets a new id, and old ids that match nothing disappear (AC-3.2, AC-3.3). |
+    | Example row `id` | **Stable while matched:** kept when its outline keeps its id, the Examples block has the same header, and a row with identical cells exists in the old version (each old row matches at most one new row, in order). A changed row gets a new id (AC-3.4). |
+    | Rule, Examples block and step `id` | **Unstable:** may change on every save. Clients must not keep them. |
+    | Test case `id` | The scenario `id` (a Scenario) or the example row `id` (an Outline row), with their stability (AC-4.4). |
+
+    All ids are kept through archive and restore (AC-6.5).
+
+    ## Request rules (D8, D10, D12, D16; database pattern item 18)
+
+    - **Ids in paths** (`projectId`, `featureId`) must be canonical UUIDs: 8-4-4-4-12 hexadecimal digits, in either
+      letter case. They are normalised to lower case. Anything else is 400 `MALFORMED_REQUEST`, including forms
+      Java's `UUID.fromString` would accept, such as `1-1-1-1-1` (AC-2.4, AC-7.6). A malformed project id is
+      rejected before the access check.
+    - **Matched exactly as received:** path ids, `{version}` and `archived` are never trimmed. Leading or trailing
+      whitespace (for example `%20` or `%09`: `/api/projects/%20{projectId}/features`, `/versions/%201`,
+      `archived=%20true`) is 400 `MALFORMED_REQUEST`, and no access check is made (AC-7.14).
+    - **Lengths count Unicode code points**, not UTF-16 units or bytes.
+    - **No string field** (`path`, `source`, `message`) may contain U+0000 or a lone surrogate (JSON can carry one
+      only as an escape such as `"\ud800"`), because the database can't store them: 400 `VALIDATION_FAILED` with an
+      `errors` entry for the field (AC-1.7, AC-1.16). `path` and `message` reject every control character too
+      (U+0000–U+001F and U+007F–U+009F; for `message`, after trimming); `source` doesn't, because Gherkin files
+      contain tabs and line breaks. `path` also rejects invisible parts (schema `FeaturePath`, AC-1.16).
+    - **JSON types are strict:** a number or boolean where a string is expected (for example `"source": 123`) is 400
+      `MALFORMED_REQUEST` (AC-7.9), as is an array or object. This holds for every string field: a JSON number
+      (including a fraction such as `1.5`) or boolean for `path`, `source` or `message` is 400 `MALFORMED_REQUEST`
+      (AC-7.15). A JSON `null` is not a type error: it counts as a missing value, so it is `VALIDATION_FAILED` for a
+      required field (for example `"path": null`, AC-7.15) and means no message for `message`.
+    - **One spelling per value:** `baseVersion` is a JSON integer from 1 to 2147483647; `{version}` matches
+      `^[1-9][0-9]{0,9}$` and is at most 2147483647; `archived` is exactly `true` or `false`. Any other spelling is
+      400 `MALFORMED_REQUEST` (AC-7.12), including the right value with leading or trailing whitespace (AC-7.14).
+    - **Validation runs before the access check** (D16, as in auth-service). A caller without access who sends an
+      invalid body gets 400; it reveals nothing about the project.
+
+    ## Errors (D16)
+
+    Every error scenario-service produces is an RFC 9457 Problem (`application/problem+json`, schema `Problem`) with
+    `type` `about:blank`, `title` (the HTTP reason phrase), `status`, a non-empty `detail`, `instance` (the request
+    path without the query string) and the stable extension member `code`. Clients branch on `status` first and on
+    `code` second. When the request has an `X-Request-Id` header matching `^[A-Za-z0-9._-]{1,128}$` (the gateway
+    always sends one), the body has `requestId` with that value. Bodies never contain stack traces, exception class
+    names, SQL, hosts or ports (AC-7.9, AC-7.10).
+
+    | Situation | Status | `code` | Extra member |
+    |---|---|---|---|
+    | Bean Validation failure on a body field or a query parameter; or a valid text with more than 10,000 elements (`errors` entry `source`, order step 7a, AC-1.20) | 400 | `VALIDATION_FAILED` | `errors` |
+    | Unreadable JSON; a number, boolean, array or object where a string is expected, so a JSON number (including a fraction) or boolean for `path`, `source` or `message` (a JSON `null` is not a type error: `VALIDATION_FAILED` for `path` or `source`, no message for `message`; AC-7.15); a `baseVersion` that is a JSON string (`"1"`), a fraction (`1.5`, `1.0`) or above 2147483647; a malformed id in the path; a `{version}` with leading zeros, a sign, 0 or above 2147483647; an `archived` value other than `true` or `false`; a path id, `{version}` or `archived` with leading or trailing whitespace (for example `%20`, `%09`), since they are matched exactly as received (AC-7.14) | 400 | `MALFORMED_REQUEST` | — |
+    | No or invalid token; or the access check answered 401 | 401 | `UNAUTHENTICATED` | — |
+    | No access to the project, a role that is too low, or an unknown project | 403 | `FORBIDDEN` | — |
+    | Unknown path | 404 | `NOT_FOUND` | — |
+    | No such feature in this project (also a feature of another project) | 404 | `FEATURE_NOT_FOUND` | — |
+    | No such version of the feature | 404 | `VERSION_NOT_FOUND` | — |
+    | Method not supported on a known path | 405 | `METHOD_NOT_ALLOWED` | — |
+    | No acceptable response media type for the `Accept` header | 406 | `NOT_ACCEPTABLE` | — |
+    | Another active feature in the project has that path (ignoring letter case by ICU root lower case; schema `FeaturePath`) | 409 | `FEATURE_PATH_TAKEN` | — |
+    | `baseVersion` isn't the current version | 409 | `VERSION_CONFLICT` | `currentVersion` |
+    | Saving an archived feature | 409 | `FEATURE_ARCHIVED` | — |
+    | A write on an archived project | 409 | `PROJECT_ARCHIVED` | — |
+    | A lock that can't be acquired in time, a deadlock, or another unique-constraint conflict | 409 | `CONFLICT` | — |
+    | Unsupported `Content-Type` | 415 | `UNSUPPORTED_MEDIA_TYPE` | — |
+    | Any other 4xx that Spring MVC raises itself and that no row above covers (for example a missing required header) | Spring's status, unchanged | `MALFORMED_REQUEST` | — |
+    | The text isn't valid Gherkin: the parser reports errors (only those are listed), or, only when it reports none, the text has no Feature (one entry: line 1, column 1, `The text has no Feature`; AC-1.13, AC-1.15); or a `# encoding:` pragma other than UTF-8 (one entry: line 1, column 1, `Only UTF-8 encoding is supported`; AC-1.19) | 422 | `GHERKIN_INVALID` | `parseErrors` |
+    | Anything unexpected | 500 | `INTERNAL_ERROR` | — |
+    | The access check couldn't be completed | 503 | `ACCESS_CHECK_UNAVAILABLE` | — |
+
+    **Which error wins.** Checks run in this order, and the first failure is returned. Each operation's description
+    lists the steps that apply to it.
+
+    1. 401 `UNAUTHENTICATED` (the token, checked by the security filter).
+    2. 400 `MALFORMED_REQUEST` (ids, unreadable JSON, wrong JSON types), then 400 `VALIDATION_FAILED` (body fields and
+       query parameters).
+    3. The access check: 503 `ACCESS_CHECK_UNAVAILABLE`, 401 `UNAUTHENTICATED` (answered by the access check), or 403
+       `FORBIDDEN`.
+    4. Writes: 409 `PROJECT_ARCHIVED`.
+    5. 404 `FEATURE_NOT_FOUND`, then 404 `VERSION_NOT_FOUND`.
+    6. Save: 409 `FEATURE_ARCHIVED`, then 409 `VERSION_CONFLICT`.
+    7. Create and save: 422 `GHERKIN_INVALID`.
+    7a. Create and save: 400 `VALIDATION_FAILED` (`errors` entry `source`) when a valid text has more than 10,000
+        elements (AC-1.20). It needs the parse, so it comes after the access check and after parse errors, unlike the
+        other 400s.
+    8. Create, save with a new path, restore: 409 `FEATURE_PATH_TAKEN`.
+
+    Notes:
+    - Every 401 carries `WWW-Authenticate: Bearer`.
+    - Unknown paths (404 `NOT_FOUND`, for example `/api/projects/{projectId}/unknown`) and unsupported methods on
+      known paths (405 `METHOD_NOT_ALLOWED`, for example `DELETE /api/projects/{projectId}/features/{featureId}`)
+      apply to every path and are not repeated per operation (AC-7.9). Like every path, they need a token first.
+    - Any operation that writes can answer 409 `CONFLICT` under heavy contention. The request changes nothing, and
+      clients may retry. Simultaneous creations with one path and simultaneous saves on one version get their own
+      codes (`FEATURE_PATH_TAKEN`, `VERSION_CONFLICT`), not `CONFLICT` (AC-1.10, AC-3.11).
+    - A 406 Problem is written as `application/problem+json` only when the request's `Accept` header allows that
+      media type; otherwise the 406 body may be empty.
+
+    ## Headers and other rules
+
+    - `Location` headers are relative (`/api/projects/{projectId}/features/{featureId}`), with lower-case ids.
+    - scenario-service never emits CORS headers (`Access-Control-*`) or an `X-Request-Id` response header. The
+      gateway is the CORS authority.
+    - Identity comes only from the token. An `X-User-Id` header from the client is ignored (AC-7.8).
+    - Timestamps are UTC instants with a `Z` offset and at most microsecond precision, taken from the service clock
+      (schema `Timestamp`, AC-1.18).
+    - Operational logs (D17) never change a response. Every log line of a request carries its request ID (the valid
+      `X-Request-Id`, otherwise a generated UUID) and the caller's user id, and no line contains Gherkin text, paths,
+      names, tags, version messages, parse error messages, tokens or e-mail addresses. The US-8 ACs observe this
+      through the operations named in their descriptions: AC-8.1, AC-8.2, AC-8.3, AC-8.4, AC-8.5, AC-8.6, AC-8.7,
+      AC-8.8, AC-8.9, AC-8.10, AC-8.11, AC-8.14.
+    - `createdBy` and `updatedBy` are auth-service user ids. scenario-service stores no names or emails; clients
+      resolve names from auth-service.
+    - Lists are not paginated in phase 1. Order: features by path lower-cased, in code-point order, then by id;
+      versions newest first; tags by name in code-point (case-sensitive) order; structure and test cases in text
+      order.
+    - There is no hard delete. Features are archived instead.
+  x-spec: docs/specs/scenario-service.md
+servers:
+  - url: http://localhost:8080
+    description: Through the API gateway (normal use), once the gateway route of spec GE1 (task T13) is in place.
+  - url: http://localhost:8082
+    description: Direct to scenario-service (local development and tests).
+security:
+  - bearerAuth: []
+tags:
+  - name: Features
+    description: Create, list, view, save, archive and restore features (US-1, US-2, US-3, US-6).
+  - name: Versions
+    description: A feature's immutable version history (US-3).
+  - name: Test cases
+    description: Test cases derived from the current version, as Cucumber would run them (US-4).
+  - name: Tags
+    description: The project's tag catalogue (US-5). The feature list's `tag` filter is under Features.
+paths:
+  /api/projects/{projectId}/features:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/XRequestId'
+    get:
+      tags:
+        - Features
+      operationId: listFeatures
+      summary: List a project's features
+      description: |
+        Effective project role `READER` or higher (AC-2.1). Also allowed on an archived project (AC-7.7).
+
+        Returns summaries without `source`, ordered by path lower-cased (code-point order), then by id (AC-2.2). Only
+        the project's own features are listed (AC-2.5).
+        - Without `archived`, or with `archived=false`: active features only.
+        - With `archived=true`: archived features only (AC-6.1).
+        - With `tag`: only the features (active, or archived with `archived=true`) whose current version uses the tag
+          anywhere: on the Feature, a Rule, a Scenario or Scenario Outline, or an Examples block. Exact,
+          case-sensitive match (AC-5.4, AC-6.3, AC-6.10). A malformed `tag` is 400 `VALIDATION_FAILED` (AC-5.7).
+
+        An empty list is `[]`.
+
+        The project id and `archived` are matched exactly as received: leading or trailing whitespace (`%20`, `%09`)
+        is 400 `MALFORMED_REQUEST` (AC-7.14). The US-8 logging ACs AC-8.2, AC-8.4, AC-8.6, AC-8.8, AC-8.10 and
+        AC-8.11 observe this operation; logging never changes its response.
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (project id, `archived`; AC-7.12,
+        AC-7.14), then 400 `VALIDATION_FAILED` (`tag`); the access check (503, 401, 403).
+      parameters:
+        - $ref: '#/components/parameters/Archived'
+        - $ref: '#/components/parameters/Tag'
+      responses:
+        '200':
+          description: The project's features, as summaries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FeatureSummary'
+              example:
+                - id: 2d7f3a91-5b0c-4e6d-8a1f-9c3b5e7d1f20
+                  projectId: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                  path: features/Address.feature
+                  name: Address
+                  language: en
+                  currentVersion: 1
+                  tags:
+                    - '@address'
+                    - '@smoke'
+                  testCaseCount: 1
+                  createdBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                  createdAt: '2026-10-14T09:31:00.250311Z'
+                  updatedBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                  updatedAt: '2026-10-14T09:31:00.250311Z'
+                  archivedAt: null
+                - id: 7c1e9a40-2b5d-4f3a-9e8c-1d6b0a4f2e57
+                  projectId: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+                  path: features/checkout/payment.feature
+                  name: Payment
+                  language: en
+                  currentVersion: 1
+                  tags:
+                    - '@checkout'
+                  testCaseCount: 4
+                  createdBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                  createdAt: '2026-10-14T09:30:00.123456Z'
+                  updatedBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                  updatedAt: '2026-10-14T09:30:00.123456Z'
+                  archivedAt: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+    post:
+      tags:
+        - Features
+      operationId: createFeature
+      summary: Create a feature from Gherkin text
+      description: |
+        Effective project role `MEMBER` or higher (otherwise 403 `FORBIDDEN`, AC-1.3). Not allowed on an archived
+        project (409 `PROJECT_ARCHIVED`, AC-7.7).
+
+        Parses `source` (D8). Valid text creates the feature with version 1 (by the caller, with `message`), derives
+        its name, description, language, tags and structure, and returns the full feature with `Location` (AC-1.1,
+        AC-1.2). Invalid text is 422 `GHERKIN_INVALID` with `parseErrors`, and nothing is stored (AC-1.4,
+        AC-1.13). The "no Feature" entry appears only when the parser reports no error; otherwise only the parser's
+        errors are listed (AC-1.15). A `# encoding:` pragma other than UTF-8 is one parse error at 1:1 (AC-1.19). A
+        valid text with more than 10,000 elements is 400 `VALIDATION_FAILED` (`source`), and nothing is stored
+        (AC-1.20).
+
+        The path follows the `FeaturePath` rules (400 `VALIDATION_FAILED`, AC-1.6, AC-1.14), including no invisible
+        parts; no string field may contain U+0000 or a lone surrogate (AC-1.16). It must be free among the project's
+        **active** features, ignoring letter case by ICU root lower case (409 `FEATURE_PATH_TAKEN`, AC-1.8,
+        AC-1.17). The same path may exist in another project (AC-1.9) and on an archived feature (AC-6.4). Of several
+        simultaneous creations with one path, exactly one succeeds and every other one gets 409
+        `FEATURE_PATH_TAKEN` (AC-1.10).
+
+        `path`, `source` and `message` must be JSON strings: a number (including a fraction) or boolean is 400
+        `MALFORMED_REQUEST`, and `null` for `path` or `source` is 400 `VALIDATION_FAILED` (AC-7.15). The project id is matched exactly as
+        received (AC-7.14). `createdAt`, `updatedAt` and version 1's `createdAt` are taken from the service clock, in
+        UTC (AC-1.18).
+
+        The US-8 logging ACs AC-8.1, AC-8.3, AC-8.5, AC-8.9 and AC-8.14 observe this operation; logging never changes
+        its response.
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`, then 400 `VALIDATION_FAILED`; the access
+        check (503, 401, 403); 409 `PROJECT_ARCHIVED`; 422 `GHERKIN_INVALID`; 409 `FEATURE_PATH_TAKEN`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFeatureRequest'
+            example:
+              path: features/checkout/payment.feature
+              source: |
+                @checkout
+                Feature: Payment
+                  Customers pay for their basket.
+
+                  Background:
+                    Given a basket with these items:
+                      | item  | price |
+                      | Mug   | 8.00  |
+                      | Shirt | 20.00 |
+
+                  @smoke
+                  Scenario: Pay by card
+                    When the customer pays by card
+                    Then the receipt is:
+                      """text
+                      Total: 28.00
+                      """
+
+                  Rule: Vouchers
+
+                    Scenario Outline: Pay with a voucher
+                      When the customer pays with voucher "<code>"
+                      Then the result is "<result>"
+
+                      @regression
+                      Examples: Valid vouchers
+                        | code   | result    |
+                        | SAVE10 | confirmed |
+                        | SAVE20 | confirmed |
+
+                      Examples: Expired vouchers
+                        | code | result   |
+                        | OLD5 | rejected |
+              message: First draft
+      responses:
+        '201':
+          description: The feature was created with version 1.
+          headers:
+            Location:
+              $ref: '#/components/headers/FeatureLocation'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Feature'
+              examples:
+                payment:
+                  $ref: '#/components/examples/PaymentFeature'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_ARCHIVED`: the project is archived (AC-7.7). `FEATURE_PATH_TAKEN`: another active feature in the
+            project has this path, ignoring letter case by ICU root lower case (AC-1.8, AC-1.10, AC-1.17); a path
+            conflict is always this code, never `CONFLICT`. `CONFLICT`: a lock couldn't be acquired in time, or
+            another unique conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                projectArchived:
+                  $ref: '#/components/examples/ProjectArchived'
+                featurePathTaken:
+                  $ref: '#/components/examples/FeaturePathTaken'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/GherkinInvalid'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/features/{featureId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/FeatureId'
+      - $ref: '#/components/parameters/XRequestId'
+    get:
+      tags:
+        - Features
+      operationId: getFeature
+      summary: View a feature with its text and structure
+      description: |
+        Effective project role `READER` or higher (AC-2.3). Also allowed on an archived project and for an archived
+        feature (AC-6.1).
+
+        Returns the feature's metadata, the current version's `source` exactly as stored (AC-2.6), its Feature-level
+        `tags`, and its structure (`children`) parsed from the current version (AC-1.2). Absent names and descriptions
+        are `""`, an Examples block without a table has empty `header` and `rows` (AC-4.6), and each tag is listed
+        once per element (AC-5.8). An unknown feature, or a feature of another project, is 404 `FEATURE_NOT_FOUND`
+        (AC-2.4). The ids are matched exactly as received: leading or trailing whitespace is 400
+        `MALFORMED_REQUEST` (AC-7.14). AC-8.7 observes this operation's logs.
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`.
+      responses:
+        '200':
+          description: The feature.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Feature'
+              examples:
+                payment:
+                  $ref: '#/components/examples/PaymentFeature'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/FeatureNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+    put:
+      tags:
+        - Features
+      operationId: saveFeature
+      summary: Save a new version of a feature (and change its path)
+      description: |
+        Effective project role `MEMBER` or higher (otherwise 403 `FORBIDDEN`, AC-3.8). Not allowed on an archived
+        project (409 `PROJECT_ARCHIVED`, AC-7.7) or for an archived feature (409 `FEATURE_ARCHIVED`, AC-6.2).
+
+        The body carries the full new state: `source`, `path`, `baseVersion` and an optional `message` (D9).
+        - `baseVersion` must be the current version; otherwise 409 `VERSION_CONFLICT` with `currentVersion`, and
+          nothing changes (AC-3.5, AC-3.11). It must be a JSON integer from 1 to 2147483647; any other spelling is
+          400 `MALFORMED_REQUEST` (AC-7.12).
+        - `path`, `source` and `message` follow the same rules as on creation: no U+0000 or lone surrogate, no
+          invisible path parts (400 `VALIDATION_FAILED`, AC-1.16); JSON strings only, so a number (including a
+          fraction) or boolean is 400 `MALFORMED_REQUEST`, and `null` for `path` or `source` is 400
+          `VALIDATION_FAILED` (AC-7.15).
+        - A changed `source` must be valid Gherkin (422 `GHERKIN_INVALID`, nothing changes, AC-3.6; the "no Feature"
+          entry only when the parser reports no error, AC-1.15; only UTF-8 encoding pragmas, AC-1.19) and have at
+          most 10,000 elements (400 `VALIDATION_FAILED`, `source`, AC-1.20). It becomes the
+          next version, by the caller, with `message` trimmed (AC-3.14), and the structure, tags and test cases
+          follow it (AC-3.1, AC-4.4, AC-5.2). Scenario and example-row ids follow the stability rules (AC-3.2 to AC-3.4),
+          matched on structured values, so names that contain separators never collide (AC-3.15).
+        - A `source` identical to the current version's text, byte for byte, creates no version: `currentVersion` and
+          `updatedAt` stay the same, and `message` isn't stored (AC-3.7).
+        - A `path` different from the current one becomes the feature's path. It must be free among the project's
+          other active features, ignoring letter case by ICU root lower case (409 `FEATURE_PATH_TAKEN`, AC-3.12,
+          AC-1.17). A path change alone creates no version (AC-3.13).
+        - The ids are matched exactly as received: leading or trailing whitespace is 400 `MALFORMED_REQUEST`
+          (AC-7.14).
+
+        `updatedAt` and `updatedBy` are changed by a new version, a path change (even without a new version), and a real
+        archive or restore; unchanged by an identical save, archiving an archived feature, or restoring an active one.
+        `createdAt` and `createdBy` never change (AC-3.13).
+
+        Returns the feature as it is after the save (AC-3.1).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`, then 400 `VALIDATION_FAILED`; the access
+        check (503, 401, 403); 409 `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND`; 409 `FEATURE_ARCHIVED`; 409
+        `VERSION_CONFLICT`; 422 `GHERKIN_INVALID`; 409 `FEATURE_PATH_TAKEN`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveFeatureRequest'
+            example:
+              path: features/checkout/payment.feature
+              source: "@checkout\nFeature: Payment\n  Customers pay for their basket.\n\n  Background:\n    Given a basket with these items:\n      | item  | price |\n      | Mug   | 8.00  |\n      | Shirt | 20.00 |\n\n  @smoke\n  Scenario: Pay by card\n    When the customer pays by credit card\n    Then the receipt is:\n      \"\"\"text\n      Total: 28.00\n      \"\"\"\n\n  Scenario: Pay by bank transfer\n    When the customer pays by bank transfer\n    Then the order waits for payment\n\n  Rule: Vouchers\n\n    Scenario Outline: Pay with a voucher\n      When the customer pays with voucher \"<code>\"\n      Then the result is \"<result>\"\n\n      @regression\n      Examples: Valid vouchers\n        | code   | result    |\n        | SAVE10 | confirmed |\n        | SAVE20 | confirmed |\n\n      Examples: Expired vouchers\n        | code | result   |\n        | OLD5 | rejected |\n"
+              baseVersion: 1
+              message: Add bank transfer
+      responses:
+        '200':
+          description: The feature after the save (with a new version, or unchanged text).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Feature'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/FeatureNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_ARCHIVED`: the project is archived (AC-7.7). `FEATURE_ARCHIVED`: the feature is archived; restore
+            it first (AC-6.2). `VERSION_CONFLICT`: `baseVersion` isn't the current version; the Problem has
+            `currentVersion` (AC-3.5, AC-3.11). `FEATURE_PATH_TAKEN`: another active feature has the new path,
+            ignoring letter case by ICU root lower case (AC-3.12, AC-1.17). `CONFLICT`: a lock couldn't be acquired in
+            time, or another unique conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                projectArchived:
+                  $ref: '#/components/examples/ProjectArchived'
+                featureArchived:
+                  value:
+                    type: about:blank
+                    title: Conflict
+                    status: 409
+                    detail: The feature is archived. Restore it first.
+                    instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features/7c1e9a40-2b5d-4f3a-9e8c-1d6b0a4f2e57
+                    code: FEATURE_ARCHIVED
+                    requestId: rid-123
+                versionConflict:
+                  value:
+                    type: about:blank
+                    title: Conflict
+                    status: 409
+                    detail: The feature has changed since version 1. Reload it and save again.
+                    instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features/7c1e9a40-2b5d-4f3a-9e8c-1d6b0a4f2e57
+                    code: VERSION_CONFLICT
+                    currentVersion: 2
+                    requestId: rid-123
+                featurePathTaken:
+                  $ref: '#/components/examples/FeaturePathTaken'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/GherkinInvalid'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/features/{featureId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/FeatureId'
+      - $ref: '#/components/parameters/XRequestId'
+    post:
+      tags:
+        - Features
+      operationId: archiveFeature
+      summary: Archive a feature
+      description: |
+        Effective project role `MEMBER` or higher (otherwise 403 `FORBIDDEN`, AC-6.6). Not allowed on an archived
+        project (409 `PROJECT_ARCHIVED`, AC-7.7). No request body.
+
+        Sets `archivedAt` (D11). An archived feature stays readable (view, versions, test cases) but can't be saved
+        (409 `FEATURE_ARCHIVED`). It leaves the default feature list and the tag catalogue, and its path becomes free
+        for another feature (AC-6.1 to AC-6.4). Its ids are kept. Idempotent: archiving an archived feature is 200 with
+        the unchanged `archivedAt` (AC-6.8). `updatedAt` and `updatedBy` are changed by a new version, a path change
+        (even without a new version), and a real archive or restore; unchanged by an identical save, archiving an
+        archived feature, or restoring an active one (AC-6.9). There is no hard delete. The ids are matched exactly
+        as received: leading or trailing whitespace is 400 `MALFORMED_REQUEST` (AC-7.14).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 409 `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND` (AC-6.7).
+      responses:
+        '200':
+          description: The feature, archived.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Feature'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/FeatureNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_ARCHIVED`: the project is archived (AC-7.7). `CONFLICT`: a lock couldn't be acquired in time.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                projectArchived:
+                  $ref: '#/components/examples/ProjectArchived'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/features/{featureId}/restore:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/FeatureId'
+      - $ref: '#/components/parameters/XRequestId'
+    post:
+      tags:
+        - Features
+      operationId: restoreFeature
+      summary: Restore an archived feature
+      description: |
+        Effective project role `MEMBER` or higher (otherwise 403 `FORBIDDEN`). Not allowed on an archived project
+        (409 `PROJECT_ARCHIVED`). No request body.
+
+        Clears `archivedAt`. The feature is back in the feature list and the tag catalogue, with the same feature,
+        scenario and example-row ids (AC-6.5). If another active feature now has its path, ignoring letter case by
+        ICU root lower case, the answer is 409 `FEATURE_PATH_TAKEN` and the feature stays archived (AC-6.4).
+        Idempotent: restoring an active feature is 200 with `archivedAt` null and `updatedAt` unchanged (AC-6.8).
+        `updatedAt` and `updatedBy` are changed by a new version, a path change (even without a new version), and a
+        real archive or restore; unchanged by an identical save, archiving an archived feature, or restoring an active
+        one (AC-6.9). The ids are matched exactly as received: leading or trailing whitespace is 400
+        `MALFORMED_REQUEST` (AC-7.14).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 409 `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND` (AC-6.7); 409 `FEATURE_PATH_TAKEN`.
+      responses:
+        '200':
+          description: The feature, active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Feature'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/FeatureNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        '409':
+          description: |
+            `PROJECT_ARCHIVED`: the project is archived. `FEATURE_PATH_TAKEN`: another active feature has this
+            feature's path, ignoring letter case by ICU root lower case; the feature stays archived (AC-6.4). `CONFLICT`: a lock couldn't be
+            acquired in time, or another unique conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                projectArchived:
+                  $ref: '#/components/examples/ProjectArchived'
+                featurePathTaken:
+                  $ref: '#/components/examples/FeaturePathTaken'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/features/{featureId}/versions:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/FeatureId'
+      - $ref: '#/components/parameters/XRequestId'
+    get:
+      tags:
+        - Versions
+      operationId: listFeatureVersions
+      summary: A feature's version history
+      description: |
+        Effective project role `READER` or higher. Also allowed on an archived project and for an archived feature
+        (AC-6.1).
+
+        Lists every version, newest first, with its number, author, time and message, without the text (AC-1.1,
+        AC-3.1). Versions are never changed or deleted. The ids are matched exactly as received: leading or trailing
+        whitespace (for example `{featureId}%20`) is 400 `MALFORMED_REQUEST` (AC-7.14).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`.
+      responses:
+        '200':
+          description: Every version of the feature, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FeatureVersionSummary'
+              example:
+                - version: 2
+                  message: Add bank transfer
+                  createdBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                  createdAt: '2026-10-14T10:02:11.004211Z'
+                - version: 1
+                  message: First draft
+                  createdBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                  createdAt: '2026-10-14T09:30:00.123456Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/FeatureNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/features/{featureId}/versions/{version}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/FeatureId'
+      - $ref: '#/components/parameters/Version'
+      - $ref: '#/components/parameters/XRequestId'
+    get:
+      tags:
+        - Versions
+      operationId: getFeatureVersion
+      summary: One version's text
+      description: |
+        Effective project role `READER` or higher (AC-3.9). Also allowed on an archived project and for an archived
+        feature.
+
+        Returns the version's metadata and its `source`, exactly as it was saved (AC-3.1). Only the text: the parsed
+        structure exists for the current version only (`getFeature`). A version number the feature doesn't have is 404
+        `VERSION_NOT_FOUND`; a `{version}` that isn't a positive integer in its one spelling (for example `0`, `abc`, `01`, `+1`,
+        `2147483648`) is 400 `MALFORMED_REQUEST` (AC-3.9, AC-7.12). The ids and `{version}` are matched exactly as
+        received: leading or trailing whitespace (for example `/versions/%201` or `/versions/1%20`) is 400
+        `MALFORMED_REQUEST` (AC-7.14).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`; 404 `VERSION_NOT_FOUND`.
+      responses:
+        '200':
+          description: The version with its text.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeatureVersion'
+              example:
+                version: 1
+                message: First draft
+                createdBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+                createdAt: '2026-10-14T09:30:00.123456Z'
+                source: "@checkout\nFeature: Payment\n  Customers pay for their basket.\n"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          description: |
+            `FEATURE_NOT_FOUND`: no such feature in this project. `VERSION_NOT_FOUND`: the feature exists, but has no
+            version with this number (AC-3.9).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                featureNotFound:
+                  $ref: '#/components/examples/FeatureNotFound'
+                versionNotFound:
+                  value:
+                    type: about:blank
+                    title: Not Found
+                    status: 404
+                    detail: The feature has no such version.
+                    instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features/7c1e9a40-2b5d-4f3a-9e8c-1d6b0a4f2e57/versions/3
+                    code: VERSION_NOT_FOUND
+                    requestId: rid-123
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/features/{featureId}/test-cases:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/FeatureId'
+      - $ref: '#/components/parameters/XRequestId'
+    get:
+      tags:
+        - Test cases
+      operationId: listTestCases
+      summary: The test cases of a feature's current version
+      description: |
+        Effective project role `READER` or higher (AC-4.5). Also allowed on an archived project and for an archived
+        feature (AC-6.1).
+
+        Test cases are derived from the current version on every read, never stored (D13). Their content equals what
+        Cucumber's pickle compiler produces for the same text:
+        - a Scenario is one test case (`type` `SCENARIO`, `id` = the scenario id, `exampleRowId` null);
+        - each row of each Examples table of a Scenario Outline is one test case (`type` `EXAMPLE_ROW`, `id` = the
+          example row id, `scenarioId` = the outline's id);
+        - a Background is never a test case, and an Outline without Examples rows (also an Examples block without
+          a table) has none (AC-4.3, AC-4.6).
+
+        Test cases come in text order (AC-4.1). An empty list is `[]` (AC-1.11). See the `TestCase` schema for names,
+        tags and steps. The ids are matched exactly as received: leading or trailing whitespace is 400
+        `MALFORMED_REQUEST` (AC-7.14).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`.
+      responses:
+        '200':
+          description: The test cases, in text order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TestCase'
+              example:
+                - id: a3c5e7f9-1b2d-4f6a-8c0e-2d4f6a8c0e11
+                  type: SCENARIO
+                  scenarioId: a3c5e7f9-1b2d-4f6a-8c0e-2d4f6a8c0e11
+                  exampleRowId: null
+                  name: Pay by card
+                  tags:
+                    - '@checkout'
+                    - '@smoke'
+                  line: 12
+                  steps:
+                    - keyword: Given
+                      text: 'a basket with these items:'
+                      dataTable:
+                        - [item, price]
+                        - [Mug, '8.00']
+                        - [Shirt, '20.00']
+                      docString: null
+                    - keyword: When
+                      text: the customer pays by card
+                      dataTable: null
+                      docString: null
+                    - keyword: Then
+                      text: 'the receipt is:'
+                      dataTable: null
+                      docString:
+                        content: 'Total: 28.00'
+                        mediaType: text
+                - id: c7e9a1b3-5d6f-4a8c-9e0a-6b8d0f2a4c33
+                  type: EXAMPLE_ROW
+                  scenarioId: b4d6f8a0-2c3e-4a7b-9d1f-3e5a7b9d1f22
+                  exampleRowId: c7e9a1b3-5d6f-4a8c-9e0a-6b8d0f2a4c33
+                  name: Pay with a voucher
+                  tags:
+                    - '@checkout'
+                  line: 33
+                  steps:
+                    - keyword: Given
+                      text: 'a basket with these items:'
+                      dataTable:
+                        - [item, price]
+                        - [Mug, '8.00']
+                        - [Shirt, '20.00']
+                      docString: null
+                    - keyword: When
+                      text: the customer pays with voucher "OLD5"
+                      dataTable: null
+                      docString: null
+                    - keyword: Then
+                      text: the result is "rejected"
+                      dataTable: null
+                      docString: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '404':
+          $ref: '#/components/responses/FeatureNotFound'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+  /api/projects/{projectId}/tags:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/XRequestId'
+    get:
+      tags:
+        - Tags
+      operationId: listTags
+      summary: The project's tag catalogue
+      description: |
+        Effective project role `READER` or higher (AC-5.5). Also allowed on an archived project (AC-7.7).
+
+        Lists every tag used anywhere in the current version of an **active** feature of the project (on the Feature,
+        a Rule, a Scenario or Scenario Outline, or an Examples block), each with `featureCount`, the number of active
+        features that use it (AC-5.1). Sorted by name in code-point (case-sensitive) order. Tags are compared
+        case-sensitively, so `@Smoke` and `@smoke` are different tags (AC-5.3). A tag written twice on one element counts once (AC-5.8). The catalogue follows saves at once: a
+        tag no longer used anywhere disappears (AC-5.2). Archived features don't count (AC-6.3). Only the project's own
+        tags are listed (AC-5.6). An empty catalogue is `[]`. The project id is matched exactly as received: leading
+        or trailing whitespace is 400 `MALFORMED_REQUEST` (AC-7.14).
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403).
+      responses:
+        '200':
+          description: The tags in use, sorted by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tag'
+              example:
+                - name: '@address'
+                  featureCount: 1
+                - name: '@checkout'
+                  featureCount: 1
+                - name: '@regression'
+                  featureCount: 1
+                - name: '@smoke'
+                  featureCount: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/ProjectForbidden'
+        '406':
+          $ref: '#/components/responses/NotAcceptable'
+        4XX:
+          $ref: '#/components/responses/OtherClientError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/AccessCheckUnavailable'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        The JWT that auth-service issues at `POST /api/auth/login` (`accessToken`), contract C2. scenario-service
+        validates it itself on every request, with its own copy of auth-service's rules (spec D6):
+
+        - Header: `Authorization: Bearer <jwt>`. The scheme is matched case-insensitively (`bearer`, `BEARER`);
+          clients should send `Bearer` (AC-7.13).
+        - Algorithm: HS512 only. Tokens signed with HS256 or HS384, unsigned, tampered or wrongly signed tokens are
+          rejected (AC-7.1).
+        - Key: the shared secret `JWT_SECRET` (setting `app.jwtSecret`), the standard Base64 encoding of at least 64
+          bytes. The service doesn't start without it.
+        - `exp` is required and must be in the future (AC-7.1).
+        - `sub` is required and must be a **canonical** UUID (8-4-4-4-12 hexadecimal digits). This is stricter than
+          auth-service: `sub` values such as `1-1-1-1-1` are rejected (AC-7.1).
+        - The `email` and `orgs` claims are never used; neither is an `X-User-Id` header (AC-7.8).
+        - scenario-service has no user table and doesn't look the user up. A deleted or suspended user's token is
+          rejected by the access check, and the answer is 401 as well (AC-7.4).
+        - Missing or invalid credentials: 401 `UNAUTHENTICATED` with `WWW-Authenticate: Bearer`, and no access check
+          is made. Tokens are never logged.
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: |
+        Optional request ID (the gateway always sends one). When it matches the pattern, Problem bodies echo it in
+        `requestId`, and it is forwarded to the access check (AC-7.2). Otherwise it is ignored: the Problem has no
+        `requestId`, and a generated UUID is used in the logs and forwarded instead (AC-8.7). Never rejected and
+        never returned as a response header.
+      schema:
+        type: string
+      example: rid-123
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: |
+        The project's id (an auth-service project). A canonical UUID in either letter case, normalised to lower case.
+        Anything else is 400 `MALFORMED_REQUEST`, and no access check is made (AC-7.6). Matched exactly as received,
+        never trimmed: leading or trailing whitespace (for example `%20` or `%09`) is 400 `MALFORMED_REQUEST`
+        (AC-7.14). An unknown project is 403 `FORBIDDEN`, the same as no access.
+      schema:
+        $ref: '#/components/schemas/CanonicalUuid'
+    FeatureId:
+      name: featureId
+      in: path
+      required: true
+      description: |
+        The feature's id. A canonical UUID in either letter case, normalised to lower case. Anything else is 400
+        `MALFORMED_REQUEST` (AC-2.4). Matched exactly as received, never trimmed: leading or trailing whitespace (for
+        example `%20` or `%09`) is 400 `MALFORMED_REQUEST` (AC-7.14).
+      schema:
+        $ref: '#/components/schemas/CanonicalUuid'
+    Version:
+      name: version
+      in: path
+      required: true
+      description: |
+        A version number of the feature: a positive integer without leading zeros or sign, at most 2147483647;
+        leading zeros, a sign, 0 or a larger value is 400 `MALFORMED_REQUEST`, as is anything else (for example
+        `abc`) (AC-3.9, AC-7.12). Matched exactly as received, never trimmed: leading or trailing whitespace (for
+        example `%201` or `1%20`) is 400 `MALFORMED_REQUEST` (AC-7.14).
+      schema:
+        type: string
+        pattern: '^[1-9][0-9]{0,9}$'
+      example: '1'
+    Archived:
+      name: archived
+      in: query
+      required: false
+      description: |
+        `false` (the default): list active features only. `true`: list archived features only (AC-6.1). Exactly
+        `true` or `false`, in lower case; `yes`, `on`, `1`, `True`, `maybe` or an empty value is 400
+        `MALFORMED_REQUEST` (AC-7.9, AC-7.12). Matched exactly as received, never trimmed: leading or trailing
+        whitespace (for example `archived=%20true` or `archived=false%20`) is 400 `MALFORMED_REQUEST` (AC-7.14).
+      schema:
+        type: string
+        enum:
+          - 'true'
+          - 'false'
+        default: 'false'
+    Tag:
+      name: tag
+      in: query
+      required: false
+      description: |
+        Only features whose current version uses this tag anywhere. One tag, matched exactly and case-sensitively; tag
+        expressions aren't supported (D12). It is `@` followed by at least one character, at most 1,000 code points.
+        Given at most once; a repeated `tag`, a bare `@`, whitespace (ECMAScript `\s`: Unicode White_Space and
+        U+FEFF), a control character (U+0000–U+001F, U+007F–U+009F) or a longer value is 400 `VALIDATION_FAILED`
+        with an `errors` entry for `tag` (AC-5.4, AC-5.7).
+      schema:
+        type: string
+        maxLength: 1000
+        pattern: '^@[^\s\u0000-\u001F\u007F-\u009F]+$'
+      example: '@smoke'
+  headers:
+    WWWAuthenticate:
+      description: Bearer authentication challenge, on every 401.
+      schema:
+        type: string
+        pattern: '^Bearer'
+      example: Bearer
+    FeatureLocation:
+      description: The new feature's path, relative, with lower-case ids (AC-1.1).
+      schema:
+        type: string
+        pattern: '^/api/projects/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/features/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      example: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features/7c1e9a40-2b5d-4f3a-9e8c-1d6b0a4f2e57
+  schemas:
+    CanonicalUuid:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      description: |
+        A canonical UUID: 8-4-4-4-12 hexadecimal digits, either letter case. Responses always use lower case.
+      example: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+    Uuid:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      description: A canonical UUID in lower case, as it appears in responses.
+    Timestamp:
+      type: string
+      format: date-time
+      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$'
+      description: |
+        A UTC instant in ISO-8601 with a `Z` offset and at most microsecond precision (database pattern item 11), for
+        example `2026-10-14T09:30:00.123456Z`. Taken from the service clock, UTC (AC-1.18). Clients must accept 0 to 6
+        fractional digits (`2026-10-14T09:30:00Z` is valid), and compare instants, not strings.
+      example: '2026-10-14T09:30:00.123456Z'
+    FeaturePath:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: '^(?!\s)(?!.*\s$)(?:(?!\.\.?/)[^/\\\u0000-\u001F\u007F-\u009F]+/)*[^/\\\u0000-\u001F\u007F-\u009F]+\.feature$'
+      description: |
+        The feature's file path in the project, for example `features/checkout/payment.feature` (D10). The rules
+        below are normative; the `pattern` is a convenience for clients and doesn't cover lone surrogates or the
+        Unicode-blank rules below (it only rejects ECMAScript `\s` at the start or the end).
+        - 1 to 1024 code points.
+        - Segments separated by `/`. The last segment ends in `.feature` exactly, in lower case (`.FEATURE` is 400),
+          after at least one other character (`features/.feature` is 400) (AC-1.14).
+        - Not allowed: a leading `/`; an empty segment (`a//b.feature`); a `.` or `..` segment; a backslash; a control
+          character (control characters are U+0000–U+001F and U+007F–U+009F); a lone surrogate (AC-1.16); leading or
+          trailing whitespace in the whole path; a leading Unicode-blank character (Unicode whitespace, NBSP,
+          U+200B–U+200D, U+2060, U+FEFF); a segment, or a file name before `.feature`, made only of such characters
+          (for example `features/ /a.feature`, `features/<U+200B>/a.feature`, `features/<U+00A0>.feature`) (AC-1.16).
+          Spaces and other blank characters inside a segment that has other characters are allowed
+          (`features/my address.feature`).
+        - Stored and returned as sent (letter case kept).
+        - Unique among the project's **active** features, compared case-insensitively by ICU root lower case
+          (PostgreSQL `lower(… COLLATE "und-x-icu")`, the same as the unique index), which equals Java's
+          `toLowerCase(Locale.ROOT)` for Unicode 13, so `İzmir` collides with `i̇zmir` (`i` + U+0307) but not with
+          `izmir` (AC-1.17). So `Features/Checkout/PAYMENT.feature` collides with `features/checkout/payment.feature`
+          (409 `FEATURE_PATH_TAKEN`, AC-1.8). Characters added in Unicode 14 or later are compared as the database's
+          ICU does, for example U+2C2F collides with U+2C5F (AC-1.17). A collision is always 409
+          `FEATURE_PATH_TAKEN`, never `CONFLICT`. An archived feature's path is free (AC-6.4). The same path may exist
+          in another project (AC-1.9).
+
+        An invalid path is 400 `VALIDATION_FAILED` with an `errors` entry for `path` (AC-1.6, AC-1.14, AC-1.16). A
+        JSON number or boolean is 400 `MALFORMED_REQUEST`; `null` is `VALIDATION_FAILED` (AC-7.15).
+      example: features/checkout/payment.feature
+    GherkinSource:
+      type: string
+      minLength: 1
+      maxLength: 1000000
+      description: |
+        The full Gherkin text of the feature file (D8). Required and not empty, at most 1,000,000 code points, without
+        U+0000 and without lone surrogates; otherwise 400 `VALIDATION_FAILED` with an `errors` entry for `source`
+        (AC-1.7, AC-1.16). Other control characters (tabs, line feeds, carriage returns, and any other in doc strings)
+        are allowed: this is the spec's named deviation from database pattern item 18 (rule T1). Never trimmed and
+        never checked for blank content: a whitespace-only text passes this check and is then 422 `GHERKIN_INVALID`.
+        A JSON number or boolean is 400 `MALFORMED_REQUEST`; `null` is `VALIDATION_FAILED` (AC-7.15).
+
+        Then the text must be valid Gherkin (422 `GHERKIN_INVALID`). It is stored exactly as sent and comes back byte
+        for byte (AC-2.6).
+
+        **Encoding (AC-1.19).** The text is Unicode already, so the only accepted `# encoding:` pragma is UTF-8 (in
+        any letter case, or an alias that resolves to UTF-8). A pragma that names any other charset, or a name that
+        isn't a charset at all (`foo`, `-`, `ISO-8859-1`), is 422 `GHERKIN_INVALID` with exactly one parse error at
+        line 1, column 1: `Only UTF-8 encoding is supported`. Like Cucumber, only a pragma among the leading comment
+        and blank lines counts.
+
+        **Size (AC-1.20).** At most 10,000 elements. Elements are every Rule, Background, Scenario, Scenario Outline,
+        Examples block, step and example row, plus each tag on each of them (a tag written twice on one element counts
+        once). Data-table cells and doc-string text don't count. More is 400 `VALIDATION_FAILED` with an `errors`
+        entry for `source` whose message names the limit (order step 7a).
+    VersionMessage:
+      type:
+        - string
+        - 'null'
+      maxLength: 500
+      description: |
+        Optional change message for the new version. At most 500 code points; no control character (U+0000–U+001F,
+        U+007F–U+009F, so no U+0000) and no lone surrogate; otherwise 400 `VALIDATION_FAILED` with an `errors` entry
+        for `message` (AC-1.7, AC-1.16). A missing or `null` message means no message. A JSON number (including a
+        fraction such as `1.5`) or boolean is 400 `MALFORMED_REQUEST` (AC-7.15).
+
+        Trimmed of Unicode-blank characters (Unicode whitespace including NBSP, zero-width space and BOM; not NEL,
+        U+0085, which is a control character) before storing; nothing left means no message. The 500 code-point limit
+        counts the value as sent, before trimming; the control-character rule applies to the trimmed value, so an
+        inner line break is 400, a trailing line break is removed, and a NEL anywhere is 400 (AC-3.14, 1.0.3).
+    CreateFeatureRequest:
+      type: object
+      required:
+        - path
+        - source
+      properties:
+        path:
+          $ref: '#/components/schemas/FeaturePath'
+        source:
+          $ref: '#/components/schemas/GherkinSource'
+        message:
+          $ref: '#/components/schemas/VersionMessage'
+    SaveFeatureRequest:
+      type: object
+      description: |
+        The feature's full new state (D9). `path` and `source` follow the same rules as on creation.
+      required:
+        - path
+        - source
+        - baseVersion
+      properties:
+        path:
+          $ref: '#/components/schemas/FeaturePath'
+        source:
+          $ref: '#/components/schemas/GherkinSource'
+        baseVersion:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 2147483647
+          description: |
+            The version the client edited. Required, at least 1; a missing value, 0 or a negative number is 400
+            `VALIDATION_FAILED` with an `errors` entry for `baseVersion` (AC-3.10). Must be a JSON integer: a string
+            (`"1"`), a fraction (`1.5`, `1.0`) or a value above 2147483647 is 400 `MALFORMED_REQUEST`; 0 and negative
+            numbers stay `VALIDATION_FAILED` (AC-7.12). If it isn't the current version, the save is 409
+            `VERSION_CONFLICT` (AC-3.5).
+        message:
+          $ref: '#/components/schemas/VersionMessage'
+    TagName:
+      type: string
+      pattern: '^@'
+      description: A Gherkin tag with its leading `@`, for example `@smoke`. Case-sensitive.
+      example: '@smoke'
+    FeatureSummary:
+      type: object
+      description: A feature without its text and structure, as listed (AC-2.2).
+      required:
+        - id
+        - projectId
+        - path
+        - name
+        - language
+        - currentVersion
+        - tags
+        - testCaseCount
+        - createdBy
+        - createdAt
+        - updatedBy
+        - updatedAt
+        - archivedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: The feature's id. Stable (C6).
+          x-id-stability: stable
+        projectId:
+          $ref: '#/components/schemas/Uuid'
+          description: The auth-service project the feature belongs to.
+        path:
+          $ref: '#/components/schemas/FeaturePath'
+        name:
+          type: string
+          description: The text after the Feature keyword in the current version. May be empty (AC-1.11).
+        language:
+          type: string
+          maxLength: 10
+          description: |
+            The Gherkin language of the current version, from its `# language:` header; `en` without one
+            (AC-1.12).
+          example: en
+        currentVersion:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The newest version's number. The structure, tags and test cases reflect it.
+        tags:
+          type: array
+          description: The tags on the Feature line of the current version, in text order (AC-2.2). Each tag once, at its first position (AC-5.8).
+          items:
+            $ref: '#/components/schemas/TagName'
+        testCaseCount:
+          type: integer
+          format: int32
+          minimum: 0
+          description: The number of test cases the current version produces (AC-2.2).
+        createdBy:
+          $ref: '#/components/schemas/Uuid'
+          description: The auth-service user id of the creator.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedBy:
+          $ref: '#/components/schemas/Uuid'
+          description: |
+            The auth-service user id of the last change's author; the creator after creation (AC-1.1). Changed by a
+            new version, a path change (even without a new version), and a real archive or restore; unchanged by an
+            identical save, archiving an archived feature, or restoring an active one (AC-3.13, AC-6.9).
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+          description: |
+            When the feature last changed. Changed by a new version, a path change (even without a new version), and
+            a real archive or restore; unchanged by an identical save, archiving an archived feature, or restoring an
+            active one (AC-3.7, AC-3.13, AC-6.8, AC-6.9).
+        archivedAt:
+          description: When the feature was archived; `null` while it is active. Always present.
+          anyOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+    Feature:
+      type: object
+      description: |
+        A feature with its current text and its structure, parsed from the current version (AC-1.1, AC-1.2). Returned
+        by create, view, save, archive and restore.
+      required:
+        - id
+        - projectId
+        - path
+        - name
+        - description
+        - language
+        - currentVersion
+        - source
+        - tags
+        - children
+        - createdBy
+        - createdAt
+        - updatedBy
+        - updatedAt
+        - archivedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: The feature's id. Stable (C6).
+          x-id-stability: stable
+        projectId:
+          $ref: '#/components/schemas/Uuid'
+          description: The auth-service project the feature belongs to.
+        path:
+          $ref: '#/components/schemas/FeaturePath'
+        name:
+          type: string
+          description: The text after the Feature keyword. May be empty (AC-1.11).
+        description:
+          type: string
+          description: |
+            The Feature's description as the parser reports it (indentation kept); empty when there is none. Compare
+            it after trimming (AC-1.1).
+        language:
+          type: string
+          maxLength: 10
+          description: The Gherkin language, from the `# language:` header; `en` without one (AC-1.12).
+          example: en
+        currentVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        source:
+          type: string
+          description: The current version's text, exactly as saved (AC-1.1, AC-2.6).
+        tags:
+          type: array
+          description: The tags on the Feature line, in text order. Each tag once, at its first position (AC-5.8).
+          items:
+            $ref: '#/components/schemas/TagName'
+        children:
+          type: array
+          description: |
+            The Feature's Background, Scenarios, Scenario Outlines and Rules, in text order (AC-1.2). Empty for a
+            Feature without children (AC-1.11).
+          items:
+            $ref: '#/components/schemas/FeatureChild'
+        createdBy:
+          $ref: '#/components/schemas/Uuid'
+          description: The auth-service user id of the creator.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedBy:
+          $ref: '#/components/schemas/Uuid'
+          description: |
+            The auth-service user id of the last change's author; the creator after creation (AC-1.1). Changed by a
+            new version, a path change (even without a new version), and a real archive or restore; unchanged by an
+            identical save, archiving an archived feature, or restoring an active one (AC-3.13, AC-6.9).
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+          description: |
+            When the feature last changed. Changed by a new version, a path change (even without a new version), and
+            a real archive or restore; unchanged by an identical save, archiving an archived feature, or restoring an
+            active one (AC-3.7, AC-3.13, AC-6.8, AC-6.9).
+        archivedAt:
+          description: When the feature was archived; `null` while it is active. Always present.
+          anyOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+    FeatureChild:
+      description: A child of the Feature, told apart by `kind`.
+      oneOf:
+        - $ref: '#/components/schemas/Scenario'
+        - $ref: '#/components/schemas/Rule'
+      discriminator:
+        propertyName: kind
+        mapping:
+          BACKGROUND: '#/components/schemas/Scenario'
+          SCENARIO: '#/components/schemas/Scenario'
+          SCENARIO_OUTLINE: '#/components/schemas/Scenario'
+          RULE: '#/components/schemas/Rule'
+    Rule:
+      type: object
+      description: A Gherkin Rule with its own Background and scenarios.
+      required:
+        - id
+        - kind
+        - keyword
+        - name
+        - description
+        - line
+        - tags
+        - children
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: 'Unstable (C6): may change on every save. Don''t keep it.'
+          x-id-stability: unstable
+        kind:
+          type: string
+          const: RULE
+        keyword:
+          type: string
+          description: The keyword as written, without trailing whitespace (for example `Rule`, or a localised one).
+        name:
+          type: string
+          description: May be empty.
+        description:
+          type: string
+          description: As the parser reports it; empty when there is none.
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The line of the keyword in the current version's text.
+        tags:
+          type: array
+          description: The tags on the Rule, in text order. Each tag once, at its first position (AC-5.8).
+          items:
+            $ref: '#/components/schemas/TagName'
+        children:
+          type: array
+          description: The Rule's Background, Scenarios and Scenario Outlines, in text order.
+          items:
+            $ref: '#/components/schemas/Scenario'
+    ScenarioKind:
+      type: string
+      enum:
+        - BACKGROUND
+        - SCENARIO
+        - SCENARIO_OUTLINE
+      description: |
+        `BACKGROUND`; `SCENARIO` (keyword Scenario or Example, or their translations); `SCENARIO_OUTLINE` (keyword
+        Scenario Outline or Scenario Template, or their translations).
+    Scenario:
+      type: object
+      description: A Background, a Scenario or a Scenario Outline of the current version.
+      required:
+        - id
+        - kind
+        - keyword
+        - name
+        - description
+        - line
+        - tags
+        - steps
+        - examples
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: |
+            Stable while matched (C6, D9): kept across saves when the new version has an element of the same kind with
+            the same name in the same container; n-th occurrence for duplicate names (AC-3.2, AC-3.3). For a Scenario,
+            this is also its test case id.
+          x-id-stability: stable
+        kind:
+          $ref: '#/components/schemas/ScenarioKind'
+        keyword:
+          type: string
+          description: |
+            The keyword as written, without trailing whitespace (for example `Background`, `Scenario`, `Example`,
+            `Scenario Outline`, `Scenario Template`, or a localised keyword).
+        name:
+          type: string
+          description: May be empty (a Background usually has no name).
+        description:
+          type: string
+          description: As the parser reports it; empty when there is none.
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The line of the keyword in the current version's text (AC-1.2).
+        tags:
+          type: array
+          description: The tags written on this element, in text order. Always empty for a Background. Each tag once, at its first position (AC-5.8).
+          items:
+            $ref: '#/components/schemas/TagName'
+        steps:
+          type: array
+          description: The element's own steps, in text order, with placeholders not replaced.
+          items:
+            $ref: '#/components/schemas/Step'
+        examples:
+          type: array
+          description: The Examples blocks, in text order. Only a `SCENARIO_OUTLINE` has any; empty otherwise.
+          items:
+            $ref: '#/components/schemas/Examples'
+    StepKeywordType:
+      type: string
+      enum:
+        - GIVEN
+        - WHEN
+        - THEN
+        - AND
+        - BUT
+        - ASTERISK
+      description: The step keyword's normalised type, taken from the Gherkin dialect (`ASTERISK` is the `*` bullet).
+    Step:
+      type: object
+      description: A step of a Background, Scenario or Scenario Outline. It has at most one argument.
+      required:
+        - id
+        - keyword
+        - keywordType
+        - text
+        - line
+        - dataTable
+        - docString
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: 'Unstable (C6): may change on every save. Don''t keep it.'
+          x-id-stability: unstable
+        keyword:
+          type: string
+          description: The keyword as written, without trailing whitespace (for example `Given`, `Soit`, `*`).
+          example: Given
+        keywordType:
+          $ref: '#/components/schemas/StepKeywordType'
+        text:
+          type: string
+          description: The step text without the keyword. In an outline it may contain `<placeholders>`.
+          example: 'a basket with these items:'
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+        dataTable:
+          description: The step's data table, as rows of cell strings; `null` when the step has none.
+          anyOf:
+            - $ref: '#/components/schemas/DataTable'
+            - type: 'null'
+        docString:
+          description: The step's doc string; `null` when the step has none.
+          anyOf:
+            - $ref: '#/components/schemas/DocString'
+            - type: 'null'
+    DataTable:
+      type: array
+      description: A data table, as an array of rows; each row is an array of cell strings, as the parser reports them.
+      items:
+        type: array
+        items:
+          type: string
+      example:
+        - [item, price]
+        - [Mug, '8.00']
+        - [Shirt, '20.00']
+    DocString:
+      type: object
+      required:
+        - content
+        - mediaType
+      properties:
+        content:
+          type: string
+          description: The text between the delimiters, as the parser reports it.
+          example: 'Total: 28.00'
+        mediaType:
+          description: The media type written after the opening delimiter (for example `text`, `json`); `null` without one.
+          type:
+            - string
+            - 'null'
+          example: text
+    Examples:
+      type: object
+      description: One Examples block of a Scenario Outline.
+      required:
+        - id
+        - keyword
+        - name
+        - description
+        - line
+        - tags
+        - header
+        - rows
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: 'Unstable (C6): may change on every save. Don''t keep it.'
+          x-id-stability: unstable
+        keyword:
+          type: string
+          description: The keyword as written (for example `Examples`, `Scenarios`, or a localised one).
+        name:
+          type: string
+          description: May be empty.
+        description:
+          type: string
+          description: As the parser reports it; empty when there is none.
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+        tags:
+          type: array
+          description: The tags on this Examples block, in text order. Each tag once, at its first position (AC-5.8).
+          items:
+            $ref: '#/components/schemas/TagName'
+        header:
+          type: array
+          description: The column names (the table's first row); `[]` when the block has no table (AC-4.6).
+          items:
+            type: string
+          example:
+            - code
+            - result
+        rows:
+          type: array
+          description: The data rows, in text order. Each is one test case. `[]` when the block has no table (AC-4.6).
+          items:
+            $ref: '#/components/schemas/ExampleRow'
+    ExampleRow:
+      type: object
+      required:
+        - id
+        - line
+        - cells
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: |
+            Stable while matched (C6, D9): kept across saves when the outline keeps its id, the Examples block has the
+            same header and a row with identical cells exists (AC-3.2, AC-3.4). It is also this row's test case id.
+          x-id-stability: stable
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The row's line in the current version's text (AC-1.2).
+        cells:
+          type: array
+          description: The cell strings, one per header column.
+          items:
+            type: string
+          example:
+            - SAVE10
+            - confirmed
+    FeatureVersionSummary:
+      type: object
+      description: One entry of a feature's version history (AC-1.1, AC-3.1).
+      required:
+        - version
+        - message
+        - createdBy
+        - createdAt
+      properties:
+        version:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The version number, 1, 2, 3, … per feature.
+        message:
+          type:
+            - string
+            - 'null'
+          description: The change message; `null` when none was given.
+        createdBy:
+          $ref: '#/components/schemas/Uuid'
+          description: The auth-service user id of the version's author.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+    FeatureVersion:
+      description: One version with its text (AC-3.1, AC-3.9).
+      allOf:
+        - $ref: '#/components/schemas/FeatureVersionSummary'
+        - type: object
+          required:
+            - source
+          properties:
+            source:
+              type: string
+              description: The version's text, exactly as it was saved.
+    TestCaseType:
+      type: string
+      enum:
+        - SCENARIO
+        - EXAMPLE_ROW
+      description: '`SCENARIO` for a Scenario; `EXAMPLE_ROW` for one Examples row of a Scenario Outline.'
+    TestCase:
+      type: object
+      description: |
+        A test case, derived from the current version as Cucumber's pickle compiler would produce it (D13). Never
+        stored.
+      required:
+        - id
+        - type
+        - scenarioId
+        - exampleRowId
+        - name
+        - tags
+        - line
+        - steps
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+          description: The scenario id (`SCENARIO`) or the example row id (`EXAMPLE_ROW`), with their stability (C6).
+          x-id-stability: stable
+        type:
+          $ref: '#/components/schemas/TestCaseType'
+        scenarioId:
+          $ref: '#/components/schemas/Uuid'
+          description: The Scenario's id, or the Scenario Outline's id for an Outline row (AC-4.1).
+          x-id-stability: stable
+        exampleRowId:
+          description: The example row's id for an Outline row; `null` for a Scenario (AC-4.1).
+          x-id-stability: stable
+          anyOf:
+            - $ref: '#/components/schemas/Uuid'
+            - type: 'null'
+        name:
+          type: string
+          description: The scenario's name; for an Outline row, the Outline's name with placeholders replaced by the row's values (AC-4.2).
+        tags:
+          type: array
+          description: |
+            The effective tags: the Feature's, the Rule's (if any), the Scenario's or Outline's, and the Examples
+            block's (if any), in that order, without duplicates: each tag once, at its first position (AC-4.1,
+            AC-5.8).
+          items:
+            $ref: '#/components/schemas/TagName'
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The Scenario's line, or the example row's line.
+        steps:
+          type: array
+          description: |
+            The Feature Background's steps, then the Rule Background's (if any), then the scenario's own steps, with
+            placeholders replaced in text, data table and doc string (AC-4.1, AC-4.2).
+          items:
+            $ref: '#/components/schemas/TestCaseStep'
+    TestCaseStep:
+      type: object
+      required:
+        - keyword
+        - text
+        - dataTable
+        - docString
+      properties:
+        keyword:
+          type: string
+          description: The keyword as written, without trailing whitespace.
+          example: When
+        text:
+          type: string
+          description: The step text, placeholders replaced.
+          example: the customer pays with voucher "OLD5"
+        dataTable:
+          description: The data table with placeholders replaced; `null` when the step has none.
+          anyOf:
+            - $ref: '#/components/schemas/DataTable'
+            - type: 'null'
+        docString:
+          description: The doc string with placeholders replaced; `null` when the step has none.
+          anyOf:
+            - $ref: '#/components/schemas/DocString'
+            - type: 'null'
+    Tag:
+      type: object
+      description: One entry of the tag catalogue. Exactly these two members (AC-5.6).
+      required:
+        - name
+        - featureCount
+      properties:
+        name:
+          $ref: '#/components/schemas/TagName'
+        featureCount:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The number of active features whose current version uses the tag anywhere (AC-5.1).
+    ErrorCode:
+      type: string
+      description: The stable machine-readable error code (D16). New codes need a spec change.
+      enum:
+        - VALIDATION_FAILED
+        - MALFORMED_REQUEST
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - NOT_FOUND
+        - FEATURE_NOT_FOUND
+        - VERSION_NOT_FOUND
+        - METHOD_NOT_ALLOWED
+        - NOT_ACCEPTABLE
+        - FEATURE_PATH_TAKEN
+        - VERSION_CONFLICT
+        - FEATURE_ARCHIVED
+        - PROJECT_ARCHIVED
+        - CONFLICT
+        - UNSUPPORTED_MEDIA_TYPE
+        - GHERKIN_INVALID
+        - INTERNAL_ERROR
+        - ACCESS_CHECK_UNAVAILABLE
+    Problem:
+      type: object
+      description: |
+        RFC 9457 Problem Details (`application/problem+json`), the same shape as auth-service's `Problem` (contract
+        C3), plus the members `parseErrors` and `currentVersion`. `requestId` is present when the request carried a
+        valid `X-Request-Id` header, which is always the case through the gateway. Never contains stack traces,
+        exception class names, SQL, or hosts or ports.
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+          description: Always `about:blank`.
+          example: about:blank
+        title:
+          type: string
+          description: The HTTP reason phrase for `status`.
+          example: Bad Request
+        status:
+          type: integer
+          format: int32
+          description: The HTTP status code, equal to the response status.
+          example: 400
+        detail:
+          type: string
+          minLength: 1
+          description: Human-readable explanation. Always non-empty; the wording is not part of the contract.
+          example: The request has invalid fields.
+        instance:
+          type: string
+          description: The request path, without the query string.
+          example: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        errors:
+          type: array
+          description: Only on `VALIDATION_FAILED`. One entry per failed constraint, sorted by `field`.
+          items:
+            $ref: '#/components/schemas/InvalidField'
+        parseErrors:
+          type: array
+          minItems: 1
+          description: |
+            Only on `GHERKIN_INVALID` (D8). One entry per error the Gherkin parser reports, sorted by `line`, then
+            `column` (AC-1.4, AC-1.5). Only when the parser reports no error, a text without a Feature (including
+            whitespace-only or comment-only text) has exactly one entry: line 1, column 1, message
+            `The text has no Feature` (AC-1.13). When the parser reports errors, only its errors are listed (AC-1.15).
+            Never named `errors`, which is for field errors.
+          items:
+            $ref: '#/components/schemas/ParseError'
+        currentVersion:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Only on `VERSION_CONFLICT` (D9). The feature's current version number (AC-3.5, AC-3.11).
+        requestId:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,128}$'
+          description: The request's `X-Request-Id`, when it was present and valid.
+          example: rid-123
+      allOf:
+        - if:
+            required:
+              - code
+            properties:
+              code:
+                const: VALIDATION_FAILED
+          then:
+            required:
+              - errors
+        - if:
+            required:
+              - code
+            properties:
+              code:
+                const: GHERKIN_INVALID
+          then:
+            required:
+              - parseErrors
+        - if:
+            required:
+              - code
+            properties:
+              code:
+                const: VERSION_CONFLICT
+          then:
+            required:
+              - currentVersion
+    InvalidField:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: The request body field or query parameter name, for example `path`, `source`, `message`, `baseVersion` or `tag`.
+          example: path
+        message:
+          type: string
+          description: Human-readable reason; the wording is not part of the contract. Never contains the value.
+          example: Path must end in .feature
+    ParseError:
+      type: object
+      description: One Gherkin parse error (D8).
+      required:
+        - line
+        - column
+        - message
+      properties:
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 1-based line of the error in the sent `source`.
+          example: 5
+        column:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 1-based column. A column the parser reports as 0 (for example at the end of the file) is 1.
+          example: 7
+        message:
+          type: string
+          minLength: 1
+          description: |
+            The parser's text. It may quote the offending line. The wording is the parser's and is not part of the
+            contract.
+          example: 'inconsistent cells count'
+  responses:
+    BadRequest:
+      description: |
+        `VALIDATION_FAILED` (a body field or the `tag` parameter breaks a rule; the body has `errors`), or
+        `MALFORMED_REQUEST` (unreadable JSON; a number, boolean, array or object where a string is expected, so a
+        JSON number or boolean for `path`, `source` or `message` (AC-7.15); a `baseVersion` that is a JSON string, a
+        fraction or above 2147483647; a path id that isn't a canonical UUID; a `{version}` with leading zeros, a sign,
+        0 or above 2147483647; an `archived` value other than `true` or `false`; a path id, `{version}` or `archived`
+        with leading or trailing whitespace, since they are matched exactly as received (AC-7.14)).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            validationFailed:
+              value:
+                type: about:blank
+                title: Bad Request
+                status: 400
+                detail: The request has invalid fields.
+                instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+                code: VALIDATION_FAILED
+                errors:
+                  - field: path
+                    message: Path must end in .feature
+                requestId: rid-123
+            malformedRequest:
+              value:
+                type: about:blank
+                title: Bad Request
+                status: 400
+                detail: The request could not be read.
+                instance: /api/projects/not-a-uuid/features
+                code: MALFORMED_REQUEST
+                requestId: rid-123
+    Unauthenticated:
+      description: |
+        `UNAUTHENTICATED`: no `Authorization` header, another scheme, or a token that isn't valid (signature,
+        algorithm, `exp`, `sub`), in which case no access check is made (AC-7.1); or the access check answered 401,
+        for example for a deleted or suspended user (AC-7.4). Through the gateway, the gateway answers the first kind
+        itself, with its own 401 Problem without `code`.
+      headers:
+        WWW-Authenticate:
+          $ref: '#/components/headers/WWWAuthenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unauthorized
+            status: 401
+            detail: A valid bearer token is required.
+            instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+            code: UNAUTHENTICATED
+    ProjectForbidden:
+      description: |
+        `FORBIDDEN`: the caller has no access to the project, or their effective project role is too low for the
+        operation, or the project doesn't exist. Every case gets the same answer, so project ids can't be probed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Forbidden
+            status: 403
+            detail: You are not allowed to perform this operation.
+            instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+            code: FORBIDDEN
+            requestId: rid-123
+    FeatureNotFound:
+      description: |
+        `FEATURE_NOT_FOUND`: no feature with this id in this project. A feature of another project gets the same
+        answer (AC-2.4, AC-6.7).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            featureNotFound:
+              $ref: '#/components/examples/FeatureNotFound'
+    GherkinInvalid:
+      description: |
+        `GHERKIN_INVALID`: the text isn't valid Gherkin (D8). The body has `parseErrors`, sorted by line, then column
+        (AC-1.4, AC-1.5, AC-3.6). Only when the parser reports no error, a text without a Feature (including
+        whitespace-only or comment-only text) has exactly one entry: line 1, column 1, message
+        `The text has no Feature` (AC-1.13). When the parser reports errors, only its errors are listed, never the
+        "no Feature" entry (AC-1.15). A `# encoding:` pragma other than UTF-8 is exactly one entry: line 1, column 1,
+        `Only UTF-8 encoding is supported` (AC-1.19). Nothing is stored or changed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unprocessable Content
+            status: 422
+            detail: The text is not valid Gherkin.
+            instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+            code: GHERKIN_INVALID
+            parseErrors:
+              - line: 5
+                column: 7
+                message: inconsistent cells count
+            requestId: rid-123
+    AccessCheckUnavailable:
+      description: |
+        `ACCESS_CHECK_UNAVAILABLE`: the access check couldn't be completed (D4): auth-service was unreachable or too
+        slow, or answered with a 5xx, an unexpected status, an unreadable body, an unknown role or another project id
+        (AC-7.3). The service fails closed: the request changed nothing. Clients may retry later.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Service Unavailable
+            status: 503
+            detail: Access to the project could not be checked. Try again later.
+            instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+            code: ACCESS_CHECK_UNAVAILABLE
+            requestId: rid-123
+    NotAcceptable:
+      description: |
+        `NOT_ACCEPTABLE`: the `Accept` header excludes every media type this operation can return. The Problem body is
+        written only when `Accept` allows `application/problem+json`; otherwise the body may be empty.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnsupportedMediaType:
+      description: '`UNSUPPORTED_MEDIA_TYPE`: the request body isn''t `application/json` (AC-7.9).'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Unsupported Media Type
+            status: 415
+            detail: Content-Type 'text/plain' is not supported.
+            instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+            code: UNSUPPORTED_MEDIA_TYPE
+            requestId: rid-123
+    OtherClientError:
+      description: |
+        Any other 4xx raised by Spring MVC itself that no explicit response covers (for example a missing required
+        header). The status is Spring's own; the `code` is `MALFORMED_REQUEST`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InternalError:
+      description: |
+        `INTERNAL_ERROR`: an unexpected failure. The `detail` is fixed and reveals nothing internal (AC-7.10).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Internal Server Error
+            status: 500
+            detail: An unexpected error occurred.
+            instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+            code: INTERNAL_ERROR
+            requestId: rid-123
+  examples:
+    FeatureNotFound:
+      value:
+        type: about:blank
+        title: Not Found
+        status: 404
+        detail: The feature does not exist in this project.
+        instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features/0e4c2a86-9b1d-4f3e-a5c7-d9e1f3a5b7c9
+        code: FEATURE_NOT_FOUND
+        requestId: rid-123
+    ProjectArchived:
+      value:
+        type: about:blank
+        title: Conflict
+        status: 409
+        detail: The project is archived. Its content is read-only.
+        instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+        code: PROJECT_ARCHIVED
+        requestId: rid-123
+    FeaturePathTaken:
+      value:
+        type: about:blank
+        title: Conflict
+        status: 409
+        detail: Another active feature in this project already has this path.
+        instance: /api/projects/3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13/features
+        code: FEATURE_PATH_TAKEN
+        requestId: rid-123
+    PaymentFeature:
+      summary: The Payment feature at version 1 (spec glossary, AC-1.1, AC-1.2)
+      value:
+        id: 7c1e9a40-2b5d-4f3a-9e8c-1d6b0a4f2e57
+        projectId: 3f9b2d6e-1c4a-4b7e-8f0d-5a2c4e6b8d13
+        path: features/checkout/payment.feature
+        name: Payment
+        description: '  Customers pay for their basket.'
+        language: en
+        currentVersion: 1
+        source: "@checkout\nFeature: Payment\n  Customers pay for their basket.\n\n  Background:\n    Given a basket with these items:\n      | item  | price |\n      | Mug   | 8.00  |\n      | Shirt | 20.00 |\n\n  @smoke\n  Scenario: Pay by card\n    When the customer pays by card\n    Then the receipt is:\n      \"\"\"text\n      Total: 28.00\n      \"\"\"\n\n  Rule: Vouchers\n\n    Scenario Outline: Pay with a voucher\n      When the customer pays with voucher \"<code>\"\n      Then the result is \"<result>\"\n\n      @regression\n      Examples: Valid vouchers\n        | code   | result    |\n        | SAVE10 | confirmed |\n        | SAVE20 | confirmed |\n\n      Examples: Expired vouchers\n        | code | result   |\n        | OLD5 | rejected |\n"
+        tags:
+          - '@checkout'
+        children:
+          - id: 1f3b5d7f-9a0c-4e2b-8d4f-6a8c0e2b4d10
+            kind: BACKGROUND
+            keyword: Background
+            name: ''
+            description: ''
+            line: 5
+            tags: []
+            steps:
+              - id: 6e8a0c2e-4f5b-4d7a-9c1e-3b5d7f9a1c01
+                keyword: Given
+                keywordType: GIVEN
+                text: 'a basket with these items:'
+                line: 6
+                dataTable:
+                  - [item, price]
+                  - [Mug, '8.00']
+                  - [Shirt, '20.00']
+                docString: null
+            examples: []
+          - id: a3c5e7f9-1b2d-4f6a-8c0e-2d4f6a8c0e11
+            kind: SCENARIO
+            keyword: Scenario
+            name: Pay by card
+            description: ''
+            line: 12
+            tags:
+              - '@smoke'
+            steps:
+              - id: 7f9b1d3f-5a6c-4e8b-8d2f-4c6e8a0b2d02
+                keyword: When
+                keywordType: WHEN
+                text: the customer pays by card
+                line: 13
+                dataTable: null
+                docString: null
+              - id: 8a0c2e4a-6b7d-4f9c-9e3a-5d7f9b1c3e03
+                keyword: Then
+                keywordType: THEN
+                text: 'the receipt is:'
+                line: 14
+                dataTable: null
+                docString:
+                  content: 'Total: 28.00'
+                  mediaType: text
+            examples: []
+          - id: 0b2d4f6b-8c9e-4a1d-8f5b-7e9a1c3d5f04
+            kind: RULE
+            keyword: Rule
+            name: Vouchers
+            description: ''
+            line: 19
+            tags: []
+            children:
+              - id: b4d6f8a0-2c3e-4a7b-9d1f-3e5a7b9d1f22
+                kind: SCENARIO_OUTLINE
+                keyword: Scenario Outline
+                name: Pay with a voucher
+                description: ''
+                line: 21
+                tags: []
+                steps:
+                  - id: 9b1d3f5b-7c8e-4a0d-8f4b-6e8a0c2d4f05
+                    keyword: When
+                    keywordType: WHEN
+                    text: the customer pays with voucher "<code>"
+                    line: 22
+                    dataTable: null
+                    docString: null
+                  - id: 2c4e6a8c-0d1f-4b3e-9a5c-8f0b2d4e6a06
+                    keyword: Then
+                    keywordType: THEN
+                    text: the result is "<result>"
+                    line: 23
+                    dataTable: null
+                    docString: null
+                examples:
+                  - id: 3d5f7b9d-1e2a-4c4f-8b6d-9a1c3e5f7b07
+                    keyword: Examples
+                    name: Valid vouchers
+                    description: ''
+                    line: 26
+                    tags:
+                      - '@regression'
+                    header:
+                      - code
+                      - result
+                    rows:
+                      - id: d8f0b2c4-6e7a-4b9d-8f1b-7c9e1a3b5d44
+                        line: 28
+                        cells:
+                          - SAVE10
+                          - confirmed
+                      - id: e9a1c3d5-7f8b-4c0e-9a2c-8d0f2b4c6e55
+                        line: 29
+                        cells:
+                          - SAVE20
+                          - confirmed
+                  - id: 4e6a8c0e-2f3b-4d5a-9c7e-0b2d4f6a8c08
+                    keyword: Examples
+                    name: Expired vouchers
+                    description: ''
+                    line: 31
+                    tags: []
+                    header:
+                      - code
+                      - result
+                    rows:
+                      - id: c7e9a1b3-5d6f-4a8c-9e0a-6b8d0f2a4c33
+                        line: 33
+                        cells:
+                          - OLD5
+                          - rejected
+        createdBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+        createdAt: '2026-10-14T09:30:00.123456Z'
+        updatedBy: 5a2d8c1e-9f4b-4e7a-b3c6-0d1f2e3a4b5c
+        updatedAt: '2026-10-14T09:30:00.123456Z'
+        archivedAt: null

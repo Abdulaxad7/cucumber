@@ -1,6 +1,7 @@
 package com.example.authservice.model;
 
 import com.example.authservice.enums.InvitationStatus;
+import com.example.authservice.enums.OrganizationRole;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -8,7 +9,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -24,32 +25,32 @@ public class Invitation {
     @GeneratedValue(strategy = GenerationType.AUTO)
     private UUID id;
 
+    @Column(nullable = false, length = 254)
     private String email;
 
     @ManyToOne
-    @JoinColumn(name = "org_id")
+    @JoinColumn(name = "org_id", nullable = false)
     private Organization organization;
 
-    @ManyToOne
-    @JoinColumn(name = "project_id")
-    private Project project;
-
-    private String role; // Can be either OrgRole or ProjectRole
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
+    private OrganizationRole role;
 
     @ManyToOne
     @JoinColumn(name = "invited_by", nullable = false)
     private User invitedBy;
 
-    @Column(unique = true)
+    @Column(unique = true, nullable = false)
     private String token;
 
+    @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private InvitationStatus status;
 
-    private LocalDateTime expiresAt;
+    @Column(nullable = false)
+    private Instant expiresAt;
 
-    private LocalDateTime createdAt;
+    @Column(nullable = false)
+    private Instant createdAt;
 
-    // Getters and Setters
 }
-

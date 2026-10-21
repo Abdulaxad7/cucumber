@@ -1,0 +1,14 @@
+spring:
+  config:
+    # DEV ONLY: JWT_SECRET and SCENARIO_DB_PASSWORD come from the gitignored .env in the repository root
+    # (see .env.example), or from the environment. ../.env covers runs from the scenario-service directory.
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+  # DEV ONLY: the local development database (database and role scenario_service in the cucumber-postgres container
+  # on localhost:5432, see the README). The password is SCENARIO_DB_PASSWORD, read through application.yaml.
+  datasource:
+    url: jdbc:postgresql://localhost:5432/scenario_service
+    username: scenario_service
+logging:
+  level:
+    # SQL statements go through the logging system, with request and user ids and ? placeholders only (D14 item 13).
+    org.hibernate.SQL: DEBUG

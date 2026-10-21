@@ -1,9 +1,9 @@
 package org.scenarioservice;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.scenarioservice.support.ScenarioServiceIntegrationTest;
 
-@SpringBootTest
+@ScenarioServiceIntegrationTest
 class ScenarioServiceApplicationTests {
 
     @Test

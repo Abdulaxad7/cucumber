@@ -1,49 +1,67 @@
 package com.example.authservice.service.impl;
 
 import com.example.authservice.dto.request.LoginRequest;
-import com.example.authservice.dto.response.LoginResponse;
 import com.example.authservice.dto.request.RegisterRequest;
+import com.example.authservice.dto.response.LoginResponse;
 import com.example.authservice.dto.response.UserResponse;
 import com.example.authservice.enums.UserStatus;
 import com.example.authservice.exception.EmailAlreadyExistsException;
 import com.example.authservice.model.User;
 import com.example.authservice.repository.UserRepository;
 import com.example.authservice.service.AuthService;
+import com.example.authservice.util.EmailNormalizer;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.exception.ConstraintViolationException;
+import org.hibernate.exception.ConstraintViolationException.ConstraintKind;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
 
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
+    private static final int MAX_PASSWORD_BYTES = 72;
+
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider tokenProvider;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final Clock clock;
 
     @Override
+    @Transactional
     public UserResponse register(RegisterRequest registerRequest) {
-        userRepository.findByEmail(registerRequest.email()).ifPresent(u -> {
-            throw new EmailAlreadyExistsException("Email already exists: " + registerRequest.email());
+        String email = EmailNormalizer.normalize(registerRequest.email());
+        userRepository.findByEmail(email).ifPresent(u -> {
+            throw new EmailAlreadyExistsException("Email already exists: " + email);
         });
 
-        User user = new User();
-        user.setEmail(registerRequest.email());
-        user.setPasswordHash(passwordEncoder.encode(registerRequest.password()));
-        user.setFullName(registerRequest.fullName());
-        user.setStatus(UserStatus.PENDING_VERIFICATION);
-        user.setCreatedAt(LocalDateTime.now());
-        user.setUpdatedAt(LocalDateTime.now());
+        User user = User.builder().email(email)
+                .passwordHash(passwordEncoder.encode(registerRequest.password()))
+                .fullName(registerRequest.fullName())
+                .status(UserStatus.PENDING_VERIFICATION)
+                .createdAt(Instant.now(clock))
+                .updatedAt(Instant.now(clock)).build();
 
-        User savedUser = userRepository.save(user);
+        User savedUser;
+        try {
+            savedUser = userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException ex) {
+            if (isUniqueViolation(ex)) {
+                throw new EmailAlreadyExistsException("Email already exists: " + email);
+            }
+            throw ex;
+        }
 
         return new UserResponse(savedUser.getId(), savedUser.getEmail(), savedUser.getFullName(),
                 savedUser.getStatus(), savedUser.isMfaEnabled(), savedUser.getCreatedAt());
@@ -51,19 +69,30 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public LoginResponse login(LoginRequest loginRequest) {
-        Authentication authentication = authenticationManager.authenticate(
+        String email = EmailNormalizer.normalize(loginRequest.email());
+        if (loginRequest.password().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) {
+            throw new BadCredentialsException("Bad credentials");
+        }
+        authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
-                        loginRequest.email(),
+                        email,
                         loginRequest.password()
                 )
         );
 
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-
-        User user = userRepository.findByEmail(loginRequest.email())
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
 
         String token = tokenProvider.generateToken(user);
         return new LoginResponse(token);
+    }
+
+    private static boolean isUniqueViolation(DataIntegrityViolationException ex) {
+        for (Throwable cause = ex.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConstraintViolationException violation) {
+                return violation.getKind() == ConstraintKind.UNIQUE;
+            }
+        }
+        return false;
     }
 }

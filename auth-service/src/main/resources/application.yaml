@@ -1,30 +1,48 @@
 spring:
   application:
     name: auth-service
+  jackson:
+    datatype:
+      enum:
+        fail-on-numbers-for-enums: true
+  mvc:
+    log-resolved-exception: false
   jpa:
-    database: h2
-  datasource:
-    url: jdbc:h2:mem:authdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    username: admin
-    password: admin
-    driver-class-name: org.h2.Driver
-
+    open-in-view: false
     hibernate:
-      ddl-auto: create
-    defer-datasource-initialization: true
-    show-sql: true
+      ddl-auto: validate
+    show-sql: false
     properties:
       hibernate:
-        #        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+  datasource:
+    url: ${AUTH_DB_URL}
+    username: ${AUTH_DB_USERNAME}
+    password: ${AUTH_DB_PASSWORD}
+    hikari:
+      data-source-properties:
+        # Every connection waits at most 5 s for a lock (PostgreSQL lock_timeout).
+        options: "-c lock_timeout=5s"
+        # Keeps PostgreSQL's error DETAIL, which can contain stored values, out of exception messages.
+        logServerErrorDetail: false
 
 
+
+server:
+  port: 8081
+
+logging:
+  pattern:
+    correlation: "[requestId=%X{requestId:--} userId=%X{userId:--}] "
+  level:
+    org.hibernate.orm.jdbc.error: ERROR
 
 app:
-  jwtSecret: some-secret-key-that-is-long-enough
+  jwtSecret: ${JWT_SECRET}
   jwtExpirationInMs: 86400000
+  orgs:
+    free-seat-limit: 5
+  logging:
+    enabled: true
+    slow-call-threshold: 500ms
 

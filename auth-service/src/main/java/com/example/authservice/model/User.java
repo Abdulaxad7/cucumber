@@ -8,7 +8,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -24,23 +24,25 @@ public class User {
     @GeneratedValue(strategy = GenerationType.AUTO)
     private UUID id;
 
-    @Column(unique = true, nullable = false)
+    @Column(unique = true, nullable = false, length = 254)
     private String email;
 
     @Column(nullable = true)
     private String passwordHash;
 
+    @Column(nullable = false, length = 100)
     private String fullName;
 
+    @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private UserStatus status;
 
     private boolean mfaEnabled;
 
-    private LocalDateTime createdAt;
+    @Column(nullable = false)
+    private Instant createdAt;
 
-    private LocalDateTime updatedAt;
+    @Column(nullable = false)
+    private Instant updatedAt;
 
-    // Getters and Setters
 }
-

@@ -1,0 +1,45 @@
+package com.example.authservice.exception;
+
+import org.springframework.http.HttpStatus;
+
+public enum ErrorCode {
+    VALIDATION_FAILED(HttpStatus.BAD_REQUEST),
+    MALFORMED_REQUEST(HttpStatus.BAD_REQUEST),
+    UNAUTHENTICATED(HttpStatus.UNAUTHORIZED),
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED),
+    FORBIDDEN(HttpStatus.FORBIDDEN),
+    INVITATION_EMAIL_MISMATCH(HttpStatus.FORBIDDEN),
+    NOT_FOUND(HttpStatus.NOT_FOUND),
+    INVITATION_NOT_FOUND(HttpStatus.NOT_FOUND),
+    MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND),
+    METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED),
+    NOT_ACCEPTABLE(HttpStatus.NOT_ACCEPTABLE),
+    EMAIL_ALREADY_REGISTERED(HttpStatus.CONFLICT),
+    ALREADY_MEMBER(HttpStatus.CONFLICT),
+    INVITATION_PENDING(HttpStatus.CONFLICT),
+    SEAT_LIMIT_REACHED(HttpStatus.CONFLICT),
+    LAST_OWNER(HttpStatus.CONFLICT),
+    INVITATION_NOT_PENDING(HttpStatus.CONFLICT),
+    CONFLICT(HttpStatus.CONFLICT),
+    INVITATION_EXPIRED(HttpStatus.GONE),
+    INVITATION_REVOKED(HttpStatus.GONE),
+    INVITATION_ALREADY_ACCEPTED(HttpStatus.GONE),
+    UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE),
+    ROLE_CEILING(HttpStatus.UNPROCESSABLE_ENTITY),
+    SELF_ROLE_CHANGE(HttpStatus.UNPROCESSABLE_ENTITY),
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR),
+    PROJECT_NAME_TAKEN(HttpStatus.CONFLICT),
+    PROJECT_ARCHIVED(HttpStatus.CONFLICT),
+    NOT_ORG_MEMBER(HttpStatus.UNPROCESSABLE_ENTITY),
+    PROJECT_ROLE_NOT_ALLOWED(HttpStatus.UNPROCESSABLE_ENTITY);
+
+    private final HttpStatus status;
+
+    ErrorCode(HttpStatus status) {
+        this.status = status;
+    }
+
+    public HttpStatus status() {
+        return status;
+    }
+}

@@ -1,0 +1,14 @@
+spring:
+  config:
+    # DEV ONLY: JWT_SECRET comes from the gitignored .env in the repository root (see .env.example),
+    # or from the environment. ../.env covers runs from the api-gateway directory.
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+
+jwt:
+  # The same JWT_SECRET as auth-service (D3, D4). Empty when unset, so start-up fails naming JWT_SECRET.
+  secret: ${JWT_SECRET:}
+
+gateway:
+  cors:
+    # D5: the usual frontend dev-server origins. CORS_ALLOWED_ORIGINS still overrides them.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
