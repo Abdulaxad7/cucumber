@@ -148,19 +148,21 @@ TableGroup auth_service {
 }
 
 // =====================================================================
-// PROPOSED: scenario-service (Gherkin content)
-// Refinements marked "proposed (scenario-service)" come from docs/specs/scenario-service.md (Ready, approved 2026-10-14).
-// Storage per ERD-D12: every enum column below is varchar(32) + CHECK ck_<table>_<column>_values, not a PostgreSQL ENUM type.
+// AS-BUILT (schema): scenario-service (Gherkin content), Flyway V1__create_scenario_service_schema.sql (spec T2, 2026-10-18)
+// The tables below are exactly V1 on PostgreSQL 17 (database scenario_service, builtin C.UTF-8). Design: docs/specs/scenario-service.md
+// (D8 to D14, D19, D20). The JPA entities exist since spec T7 and mirror V1 (review point B passed 2026-10-18). Notes marked "as-built (V1)" describe V1 and the rules it serves.
+// Storage per ERD-D12: every enum column below is varchar(32) + CHECK ck_<table>_<column>_values, not a PostgreSQL ENUM type;
+// the DBML Enums stay for readability. No column has a database default: the application sets every value (pattern item 11).
 // =====================================================================
 
 Enum scenario_kind {
-  BACKGROUND [note: 'proposed — approved design (2026-10-12), not yet implemented (whole enum). Background steps are not a test case on their own.']
+  BACKGROUND [note: 'as-built (V1): CHECK ck_scenarios_kind_values. Background steps are not a test case on their own.']
   SCENARIO [note: 'Scenario or Example keyword']
   SCENARIO_OUTLINE [note: 'Scenario Outline or Scenario Template keyword; has examples']
 }
 
 Enum step_keyword {
-  GIVEN [note: 'proposed — approved design (2026-10-12), not yet implemented (whole enum)']
+  GIVEN [note: 'as-built (V1): CHECK ck_steps_keyword_values']
   WHEN
   THEN
   AND
@@ -169,180 +171,201 @@ Enum step_keyword {
 }
 
 Enum step_argument_type {
-  NONE [note: 'proposed — approved design (2026-10-12), not yet implemented (whole enum)']
+  NONE [note: 'as-built (V1): CHECK ck_steps_argument_type_values']
   DATA_TABLE
   DOC_STRING
 }
 
 Enum tag_target_type {
-  FEATURE [note: 'proposed — approved design (2026-10-12), not yet implemented (whole enum)']
+  FEATURE [note: 'as-built (V1): CHECK ck_tag_assignments_target_type_values']
   RULE
   SCENARIO [note: 'also used for Scenario Outline']
   EXAMPLES
 }
 
-Table features [headercolor: #D9822B] {
+Table features [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   project_id uuid [not null, note: 'references auth_service.projects.id (by ID, no FK)']
-  path varchar(1024) [not null, note: 'path of the .feature file in the project, e.g. features/checkout/payment.feature. Replaces a folder table in the MVP. proposed (scenario-service): stored as sent; relative POSIX path ending in .feature, no leading /, no empty, . or .. segment, no backslash or control character (spec D10). Can change on a save; a path change alone creates no version.']
-  name text [not null, note: 'text after Feature: in the current version. proposed (scenario-service): text instead of varchar(500), and may be empty (Cucumber accepts "Feature:" without a name).']
-  description text [not null, note: 'as the parser reports it (leading indentation kept). proposed (scenario-service): not null, empty string when absent (spec D19 #7).']
-  language varchar(10) [not null, default: 'en', note: 'from the Gherkin # language: header. The longest dialect code must fit (spec A10).']
+  path varchar(1024) [not null, note: 'path of the .feature file in the project, e.g. features/checkout/payment.feature. Replaces a folder table in the MVP. as-built (V1): stored as sent; relative POSIX path ending in .feature, no leading /, no empty, . or .. segment, no backslash or control character (spec D10). Can change on a save; a path change alone creates no version. as-built (V1): no segment and no file name before .feature made only of Unicode-blank characters, and no leading Unicode-blank character (spec D10, D20 #4). Case-insensitive comparison = PostgreSQL lower(path COLLATE "und-x-icu"), as in the unique index below.']
+  name text [not null, note: 'text after Feature: in the current version. as-built (V1): text instead of varchar(500), and may be empty (Cucumber accepts "Feature:" without a name).']
+  description text [not null, note: 'as the parser reports it (leading indentation kept). as-built (V1): not null, empty string when absent (spec D19 #7).']
+  language varchar(10) [not null, note: 'from the Gherkin # language: header (en when there is none). The longest dialect code must fit (spec A10). as-built (V1): no database default; the application always sets it.']
   current_version int [not null, note: 'feature_versions.version that the parsed tables (rules, scenarios, steps, examples) reflect']
   created_by uuid [not null, note: 'references auth_service.users.id (by ID, no FK)']
-  updated_by uuid [null, note: 'references auth_service.users.id (by ID, no FK)']
-  archived_at timestamptz [null, note: 'soft delete: results in report_service keep pointing at this id. proposed (scenario-service): archived features are read-only, hidden from default lists and the tag catalogue, and free their path; restore clears this (spec D11).']
+  updated_by uuid [not null, note: 'references auth_service.users.id (by ID, no FK). as-built (V1): not null, because create sets it to the creator (spec AC-1.1, D19 #3; database pattern item 10).']
+  archived_at timestamptz [null, note: 'soft delete: results in report_service keep pointing at this id. as-built (V1): archived features are read-only, hidden from default lists and the tag catalogue, and free their path; restore clears this (spec D11).']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
   indexes {
-    (project_id, `lower(path)`) [unique, name: 'uk_features_project_id_path_lower', note: 'proposed (scenario-service): replaces the plain unique (project_id, path); its leading project_id also serves the feature list. In PostgreSQL it is a PARTIAL unique index: UNIQUE (project_id, lower(path)) WHERE archived_at IS NULL. DBML cannot express the WHERE clause, so SQL generated from this file is stricter than the real index (it would also block archived paths).']
-    project_id [name: 'ix_features_project_id', note: 'proposed (scenario-service): feature list per project, including archived features (the partial unique index covers only active ones)']
+    (project_id, `md5(lower(path COLLATE "und-x-icu"))`) [unique, name: 'uk_features_project_id_path_lower', note: 'as-built (V1): replaces the plain unique (project_id, path); its leading project_id also serves the feature list. In PostgreSQL it is a PARTIAL unique index: UNIQUE (project_id, md5(lower(path COLLATE "und-x-icu"))) WHERE archived_at IS NULL. as-built (V1): md5 because a valid 1,024-character path of 4-byte characters (4,104 bytes) exceeds the 2,704-byte B-tree entry limit; md5 and lower are IMMUTABLE; equal lower-cased paths always have equal hashes (spec D14). DBML cannot express the WHERE clause, so SQL generated from this file is stricter than the real index (it would also block archived paths). as-built (V1): ICU lower(), as auth_service uk_projects_org_id_name_lower, because the builtin C.UTF-8 lower() differs from Java for U+0130. The application path check uses this same expression, so FEATURE_PATH_TAKEN and the index always agree (spec D10, D20 #1).']
+    project_id [name: 'ix_features_project_id', note: 'as-built (V1): feature list per project, including archived features (the partial unique index covers only active ones)']
   }
   Note: '''
-  proposed — approved design (2026-10-12), not yet implemented.
+  as-built (scenario-service V1, 2026-10-18; designed 2026-10-12).
   One Gherkin file. The Gherkin text in feature_versions is the source of truth. The rules, scenarios, steps, examples and example_rows tables are a parse of the current version only, kept for search, tag filtering and linking results (ERD-D3, ERD-D4).
-  proposed (scenario-service): path uniqueness is case-insensitive and only among active features (partial unique index above). Concurrent writes in one project are serialised with a transaction-scoped PostgreSQL advisory lock keyed by project_id (there is no project row in this database).
+  as-built (V1): path uniqueness is case-insensitive and only among active features (partial unique index above). Concurrent writes in one project are serialised with a transaction-scoped PostgreSQL advisory lock keyed by project_id (there is no project row in this database).
   Living documentation = the current version of each non-archived feature plus the latest result per scenario. It is computed and needs no table in the MVP. Later: a doc_releases table (a named map of feature_id to version) for published snapshots.
   '''
 }
 
-Table feature_versions [headercolor: #D9822B] {
+Table feature_versions [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   feature_id uuid [not null]
   version int [not null, note: 'starts at 1, +1 on every saved change']
-  source text [not null, note: 'full Gherkin text of the file at this version. proposed (scenario-service): stored exactly as sent (line endings and trailing spaces kept), at most 1,000,000 code points, never containing U+0000 or a lone surrogate (spec D8).']
-  content_hash varchar(64) [not null, note: 'SHA-256 hex of source; saving identical content creates no new version. proposed (scenario-service): hash of the UTF-8 bytes of source.']
-  message varchar(500) [null, note: 'optional change message; blank is stored as null']
+  source text [not null, note: 'full Gherkin text of the file at this version. as-built (V1): stored exactly as sent (line endings and trailing spaces kept), at most 1,000,000 code points, never containing U+0000 or a lone surrogate (spec D8).']
+  content_hash varchar(64) [not null, note: 'SHA-256 hex of source; saving identical content creates no new version. as-built (V1): hash of the UTF-8 bytes of source.']
+  message varchar(500) [null, note: 'optional change message; blank is stored as null. as-built (V1): trimmed of Unicode-blank characters before storing, null when nothing is left; no control character or lone surrogate (spec D19 #9).']
   created_by uuid [not null, note: 'references auth_service.users.id (by ID, no FK)']
   created_at timestamptz [not null]
 
   indexes {
-    (feature_id, version) [unique]
+    (feature_id, version) [unique, name: 'uk_feature_versions_feature_id_version', note: 'as-built (V1): unique constraint; also indexes the feature_id foreign key']
   }
-  Note: 'proposed — approved design (2026-10-12), not yet implemented. Immutable history of a feature. A diff between versions is computed from source, not stored. Later: import from Git (commit SHA per version) as a column. proposed (scenario-service): rows are never updated or deleted; a save is refused with VERSION_CONFLICT unless its base version equals features.current_version (spec D9).'
+  Note: 'as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). Immutable history of a feature. A diff between versions is computed from source, not stored. Later: import from Git (commit SHA per version) as a column. as-built (V1): rows are never updated or deleted; a save is refused with VERSION_CONFLICT unless its base version equals features.current_version (spec D9).'
 }
 
-Table rules [headercolor: #D9822B] {
+Table rules [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   feature_id uuid [not null]
-  keyword_text varchar(50) [not null, note: 'keyword as written, e.g. Rule (localised languages differ)']
-  name text [not null, note: 'proposed (scenario-service): text instead of varchar(500); may be empty']
-  description text [not null, note: 'proposed (scenario-service): not null, empty string when absent (spec D19 #7)']
+  keyword_text text [not null, note: 'keyword as written, e.g. Rule (localised languages differ). as-built (V1, widened in place 2026-10-18 by user decision): text, because Gherkin dialect keywords exceed 50 code points (en-tx Examples has 53; spec A10).']
+  name text [not null, note: 'as-built (V1): text instead of varchar(500); may be empty']
+  description text [not null, note: 'as-built (V1): not null, empty string when absent (spec D19 #7)']
   position int [not null, note: 'order among the children of the feature']
-  line int [null, note: 'line number in the current version source']
+  line int [not null, note: 'line number in the current version source. as-built (V1): not null; the parser reports a line for every element (database pattern item 10, spec D20 #9).']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
-  Note: 'proposed — approved design (2026-10-12), not yet implemented. A Gherkin Rule (Gherkin 6+) that groups a Background and scenarios. proposed (scenario-service): rule ids are not stable across versions; clients must not keep them (spec D9).'
+
+  indexes {
+    feature_id [name: 'ix_rules_feature_id', note: 'as-built (V1): indexes the foreign key']
+  }
+  Note: 'as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). A Gherkin Rule (Gherkin 6+) that groups a Background and scenarios. as-built (V1): rule ids are not stable across versions; clients must not keep them (spec D9).'
 }
 
-Table scenarios [headercolor: #D9822B] {
-  id uuid [pk, not null, note: 'stable across versions when the scenario is matched on re-parse (ERD-D3); results reference it. proposed (scenario-service): matched by kind (BACKGROUND, SCENARIO, SCENARIO_OUTLINE), name and container (the feature, or a rule with the same name); with duplicate names the n-th old element matches the n-th new one (spec D9).']
+Table scenarios [headercolor: #2D6A9F] {
+  id uuid [pk, not null, note: 'stable across versions when the scenario is matched on re-parse (ERD-D3); results reference it. as-built (V1): matched by kind (BACKGROUND, SCENARIO, SCENARIO_OUTLINE), name and container (the feature, or a rule with the same name); with duplicate names the n-th old element matches the n-th new one (spec D9).']
   feature_id uuid [not null]
   rule_id uuid [null, note: 'set when the scenario or background sits inside a Rule']
-  kind scenario_kind [not null, note: 'proposed (scenario-service): varchar(32) + CHECK ck_scenarios_kind_values (ERD-D12)']
-  keyword_text varchar(50) [not null, note: 'keyword as written, e.g. Scenario, Example, Scenario Outline, Background']
-  name text [not null, note: 'a Background may have no name. proposed (scenario-service): text instead of varchar(1000); not null, empty string when absent (spec D19 #7).']
-  description text [not null, note: 'proposed (scenario-service): not null, empty string when absent (spec D19 #7)']
+  kind scenario_kind [not null, note: 'as-built (V1): varchar(32) + CHECK ck_scenarios_kind_values (ERD-D12)']
+  keyword_text text [not null, note: 'keyword as written, e.g. Scenario, Example, Scenario Outline, Background. as-built (V1, widened in place 2026-10-18 by user decision): text (spec A10).']
+  name text [not null, note: 'a Background may have no name. as-built (V1): text instead of varchar(1000); not null, empty string when absent (spec D19 #7).']
+  description text [not null, note: 'as-built (V1): not null, empty string when absent (spec D19 #7)']
   position int [not null, note: 'order within the feature or rule']
-  line int [null]
+  line int [not null, note: 'as-built (V1): not null; the parser reports a line for every element (spec D20 #9)']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
+
+  indexes {
+    feature_id [name: 'ix_scenarios_feature_id', note: 'as-built (V1): indexes the foreign key']
+    rule_id [name: 'ix_scenarios_rule_id', note: 'as-built (V1): indexes the foreign key']
+  }
   Note: '''
-  proposed — approved design (2026-10-12), not yet implemented.
+  as-built (scenario-service V1, 2026-10-18; designed 2026-10-12).
   Holds Backgrounds, Scenarios and Scenario Outlines in one table so that steps have one parent. Rule enforced by the application: at most one BACKGROUND per feature and per rule.
   A **test case** is not stored: it is a SCENARIO, or one example row of a SCENARIO_OUTLINE (ERD-D5).
   '''
 }
 
-Table steps [headercolor: #D9822B] {
+Table steps [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   scenario_id uuid [not null]
   position int [not null]
-  keyword step_keyword [not null, note: 'proposed (scenario-service): varchar(32) + CHECK ck_steps_keyword_values (ERD-D12)']
-  keyword_text varchar(50) [not null, note: 'keyword as written, e.g. Given, Soit (localised). proposed (scenario-service): without trailing whitespace.']
+  keyword step_keyword [not null, note: 'as-built (V1): varchar(32) + CHECK ck_steps_keyword_values (ERD-D12)']
+  keyword_text text [not null, note: 'keyword as written, e.g. Given, Soit (localised). as-built (V1): without trailing whitespace; text since the in-place widening of 2026-10-18 (user decision, spec A10).']
   step_text text [not null, note: 'step text without the keyword; may contain <placeholders> in outlines']
-  argument_type step_argument_type [not null, default: 'NONE', note: 'proposed (scenario-service): varchar(32) + CHECK ck_steps_argument_type_values (ERD-D12). The application always sets it; the DBML default only documents the usual value.']
-  data_table jsonb [null, note: 'when DATA_TABLE: array of rows, each an array of cell strings. proposed (scenario-service): jsonb instead of json.']
+  argument_type step_argument_type [not null, note: 'as-built (V1): varchar(32) + CHECK ck_steps_argument_type_values (ERD-D12); no database default, the application always sets it (NONE when the step has no argument).']
+  data_table jsonb [null, note: 'when DATA_TABLE: array of rows, each an array of cell strings. as-built (V1): jsonb instead of json.']
   doc_string text [null, note: 'when DOC_STRING: content between the delimiters']
-  doc_string_media_type varchar(100) [null, note: 'optional media type after the opening delimiter, e.g. json']
-  line int [null]
+  doc_string_media_type text [null, note: 'optional media type after the opening delimiter, e.g. json. as-built (V1): text instead of varchar(100); the parser accepts any length, and every text it accepts must be storable (spec D8, D20 #9).']
+  line int [not null, note: 'as-built (V1): not null; the parser reports a line for every element (spec D20 #9)']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
-  Note: 'proposed — approved design (2026-10-12), not yet implemented. A step has at most one argument: a data table or a doc string (ERD-D6). Later: a step definition library for autocomplete, kept in a table note until needed. proposed (scenario-service): step ids are not stable across versions; report_service.step_results relies on its text snapshot (spec D9).'
+
+  indexes {
+    scenario_id [name: 'ix_steps_scenario_id', note: 'as-built (V1): indexes the foreign key']
+  }
+  Note: 'as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). A step has at most one argument: a data table or a doc string (ERD-D6). Later: a step definition library for autocomplete, kept in a table note until needed. as-built (V1): step ids are not stable across versions; report_service.step_results relies on its text snapshot (spec D9).'
 }
 
-Table examples [headercolor: #D9822B] {
+Table examples [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   scenario_id uuid [not null, note: 'must be a SCENARIO_OUTLINE (application rule)']
-  keyword_text varchar(50) [not null, note: 'Examples or Scenarios, as written']
-  name text [not null, note: 'proposed (scenario-service): text instead of varchar(500); not null, empty string when absent (spec D19 #7)']
-  description text [not null, note: 'proposed (scenario-service): not null, empty string when absent (spec D19 #7)']
+  keyword_text text [not null, note: 'Examples or Scenarios, as written. as-built (V1, widened in place 2026-10-18 by user decision): text, because the en-tx Examples keyword has 53 code points (spec A10).']
+  name text [not null, note: 'as-built (V1): text instead of varchar(500); not null, empty string when absent (spec D19 #7)']
+  description text [not null, note: 'as-built (V1): not null, empty string when absent (spec D19 #7)']
   position int [not null]
-  header jsonb [not null, note: 'array of column names, e.g. ["user","result"]. proposed (scenario-service): jsonb instead of json; [] when the Examples block has no table (spec D19 #7).']
-  line int [null]
+  header jsonb [not null, note: 'array of column names, e.g. ["user","result"]. as-built (V1): jsonb instead of json; [] when the Examples block has no table (spec D19 #7).']
+  line int [not null, note: 'as-built (V1): not null; the parser reports a line for every element (spec D20 #9)']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
-  Note: 'proposed — approved design (2026-10-12), not yet implemented. One Examples block of a Scenario Outline. Can carry its own tags. proposed (scenario-service): examples ids are not stable across versions (spec D9).'
+
+  indexes {
+    scenario_id [name: 'ix_examples_scenario_id', note: 'as-built (V1): indexes the foreign key']
+  }
+  Note: 'as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). One Examples block of a Scenario Outline. Can carry its own tags. as-built (V1): examples ids are not stable across versions (spec D9).'
 }
 
-Table example_rows [headercolor: #D9822B] {
-  id uuid [pk, not null, note: 'referenced by results; one row = one test case. proposed (scenario-service): kept across versions when the outline keeps its id, the Examples block has the same header, and an old row has identical cells (each old row matches at most one new row, in order); a changed row gets a new id (spec D9).']
+Table example_rows [headercolor: #2D6A9F] {
+  id uuid [pk, not null, note: 'referenced by results; one row = one test case. as-built (V1): kept across versions when the outline keeps its id, the Examples block has the same header, and an old row has identical cells (each old row matches at most one new row, in order); a changed row gets a new id (spec D9).']
   examples_id uuid [not null]
   position int [not null]
-  cells jsonb [not null, note: 'array of cell strings, same length as examples.header. proposed (scenario-service): jsonb instead of json.']
-  line int [null]
+  cells jsonb [not null, note: 'array of cell strings, same length as examples.header. as-built (V1): jsonb instead of json.']
+  line int [not null, note: 'as-built (V1): not null; the parser reports a line for every element (spec D20 #9)']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
-  Note: 'proposed — approved design (2026-10-12), not yet implemented. Kept as rows, not JSON inside examples, because each row is a test case that results point to.'
+
+  indexes {
+    examples_id [name: 'ix_example_rows_examples_id', note: 'as-built (V1): indexes the foreign key']
+  }
+  Note: 'as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). Kept as rows, not JSON inside examples, because each row is a test case that results point to.'
 }
 
-Table tags [headercolor: #D9822B] {
+Table tags [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   project_id uuid [not null, note: 'references auth_service.projects.id (by ID, no FK)']
-  name text [not null, note: 'with the leading @, e.g. @smoke; compared case-sensitively like Cucumber tag expressions. proposed (scenario-service): text instead of varchar(255), so any tag the parser accepts can be stored (spec D8, D19 #5). One assignment per element even when the text repeats a tag (D19 #11).']
+  name text [not null, note: 'with the leading @, e.g. @smoke; compared case-sensitively like Cucumber tag expressions. as-built (V1): text instead of varchar(255), so any tag the parser accepts can be stored (spec D8, D19 #5). One assignment per element even when the text repeats a tag (D19 #11).']
   created_at timestamptz [not null]
   updated_at timestamptz [not null]
 
   indexes {
-    (project_id, name) [unique]
+    (project_id, `md5(name)`) [unique, name: 'uk_tags_project_id_name', note: 'as-built (V1): md5(name) instead of name, because a valid long tag (for example 1,000 emoji) exceeds the 2,704-byte B-tree entry limit. Exact, case-sensitive uniqueness per project is unchanged (spec D12, D14).']
   }
   Note: '''
-  proposed — approved design (2026-10-12), not yet implemented. Project-wide tag catalogue for filtering and autocomplete. Tags are written in the Gherkin text; this table is derived on parse (ERD-D7).
-  proposed (scenario-service): the API lists only tags used in an active feature's current version, with the number of such features (featureCount). Whether a row with no assignment left is deleted or kept is an implementation choice (spec D12). Inserts run under the project advisory lock, so two saves introducing one new tag can't collide.
+  as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). Project-wide tag catalogue for filtering and autocomplete. Tags are written in the Gherkin text; this table is derived on parse (ERD-D7).
+  as-built (V1): the API lists only tags used in an active feature's current version, with the number of such features (featureCount). Whether a row with no assignment left is deleted or kept is an implementation choice (spec D12). Inserts run under the project advisory lock, so two saves introducing one new tag can't collide.
   '''
 }
 
-Table tag_assignments [headercolor: #D9822B] {
+Table tag_assignments [headercolor: #2D6A9F] {
   id uuid [pk, not null]
   tag_id uuid [not null]
-  feature_id uuid [not null, note: 'proposed (scenario-service): the feature whose current version carries the tag, whatever the target_type. Makes featureCount, the tag filter and clean-up on re-parse simple queries, and cascades with the feature.']
-  target_type tag_target_type [not null, note: 'proposed (scenario-service): varchar(32) + CHECK ck_tag_assignments_target_type_values (ERD-D12)']
+  feature_id uuid [not null, note: 'as-built (V1): the feature whose current version carries the tag, whatever the target_type. Makes featureCount, the tag filter and clean-up on re-parse simple queries, and cascades with the feature.']
+  target_type tag_target_type [not null, note: 'as-built (V1): varchar(32) + CHECK ck_tag_assignments_target_type_values (ERD-D12)']
   target_id uuid [not null, note: 'id in features, rules, scenarios or examples depending on target_type. Polymorphic, so no FK; the parser keeps it consistent.']
   created_at timestamptz [not null]
 
   indexes {
-    (tag_id, target_type, target_id) [unique]
-    (target_type, target_id)
-    (feature_id, tag_id) [name: 'ix_tag_assignments_feature_id_tag_id', note: 'proposed (scenario-service): tag catalogue counts and the feature list tag filter; also indexes the feature_id foreign key']
+    (tag_id, target_type, target_id) [unique, name: 'uk_tag_assignments_tag_id_target_type_target_id', note: 'as-built (V1): unique constraint; also indexes the tag_id foreign key']
+    (target_type, target_id) [name: 'ix_tag_assignments_target_type_target_id']
+    (feature_id, tag_id) [name: 'ix_tag_assignments_feature_id_tag_id', note: 'as-built (V1): tag catalogue counts and the feature list tag filter; also indexes the feature_id foreign key']
   }
-  Note: 'proposed — approved design (2026-10-12), not yet implemented. Which element carries which tag. Inherited tags (feature to scenario) are computed, not stored.'
+  Note: 'as-built (scenario-service V1, 2026-10-18; designed 2026-10-12). Which element carries which tag. Inherited tags (feature to scenario) are computed, not stored.'
 }
 
-Ref: feature_versions.feature_id > features.id [delete: restrict] // proposed (scenario-service): restrict, was cascade; versions are never deleted (spec D9, D14)
+Ref: feature_versions.feature_id > features.id [delete: restrict] // as-built (V1): restrict, was cascade; versions are never deleted (spec D9, D14)
 Ref: rules.feature_id > features.id [delete: cascade]
 Ref: scenarios.feature_id > features.id [delete: cascade]
 Ref: scenarios.rule_id > rules.id [delete: cascade]
 Ref: steps.scenario_id > scenarios.id [delete: cascade]
 Ref: examples.scenario_id > scenarios.id [delete: cascade]
 Ref: example_rows.examples_id > examples.id [delete: cascade]
-Ref: tag_assignments.tag_id > tags.id [delete: restrict] // proposed (scenario-service): restrict, was cascade; a catalogue row is only removed once unused (spec D12, D14)
-Ref: tag_assignments.feature_id > features.id [delete: cascade] // proposed (scenario-service)
+Ref: tag_assignments.tag_id > tags.id [delete: restrict] // as-built (V1): restrict, was cascade; a catalogue row is only removed once unused (spec D12, D14)
+Ref: tag_assignments.feature_id > features.id [delete: cascade] // as-built (V1)
 
 TableGroup scenario_service {
   features

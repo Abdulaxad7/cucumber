@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: API gateway edge contract
-  version: 0.2.2
+  version: 0.2.3
   summary: Conventions every client and downstream service relies on when calling the platform through the API gateway.
   description: |
     The API gateway (`api-gateway`) is the single entry point for every API call (spec: `docs/specs/api-gateway.md`).
@@ -16,7 +16,7 @@ info:
     |---|---|---|---|---|---|
     | auth | `/api/auth/**` | auth-service | `AUTH_SERVICE_URL` | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/invitations/{token}/accept` | Active |
     | orgs | `/api/orgs` and `/api/orgs/**` | auth-service | `AUTH_SERVICE_URL` | none | Active |
-    | scenarios | `/api/scenarios/**` | scenario-service | `SCENARIO_SERVICE_URL` | none | Provisional placeholder |
+    | scenarios | `/api/scenarios/**`, `/api/projects/*/features`, `/api/projects/*/features/**`, `/api/projects/*/tags` | scenario-service | `SCENARIO_SERVICE_URL` | none | Active |
     | reports | `/api/reports/**` | report-service | `REPORT_SERVICE_URL` | none | Provisional placeholder |
     | (gateway-owned) | `GET /actuator/health` | the gateway itself | — | yes | Active |
 
@@ -28,7 +28,7 @@ info:
     - **Deny by default.** Any path that matches no route returns **401** without a valid token and **404** with one.
       Authentication is checked before route matching, so anonymous callers cannot discover which routes exist.
     - auth-service's `/h2-console`, `/swagger-ui/**`, `/v3/api-docs` and `/actuator/**` are not reachable through the
-      gateway. `/api/projects/**` is not routed in phase 1.
+      gateway. `/api/projects/**` is not routed, except the scenario-service patterns above.
       `/internal/**` is never routed (auth-service's access check is service-to-service).
     - The gateway exposes no management endpoint other than `GET /actuator/health`. `/actuator/env`,
       `/actuator/beans`, `/actuator/configprops`, `/actuator/gateway/**` and the rest follow the deny-by-default rule:
@@ -457,13 +457,16 @@ x-routes:
   - id: scenarios
     pathPrefixes:
       - /api/scenarios/**
+      - /api/projects/*/features
+      - /api/projects/*/features/**
+      - /api/projects/*/tags
     service: scenario-service
     baseUrlSetting: SCENARIO_SERVICE_URL
     defaultBaseUrl: http://localhost:8082
     publicOperations: []
-    status: provisional
+    status: active
     contract: scenario-service.openapi.yaml
-    contractNote: Not defined yet. The prefix is a placeholder until scenario-service's first spec.
+    contractNote: Version 1.0.3 (scenario-service spec D2). /api/scenarios/** is kept for existing gateway tests; scenario-service answers it with 404.
   - id: reports
     pathPrefixes:
       - /api/reports/**

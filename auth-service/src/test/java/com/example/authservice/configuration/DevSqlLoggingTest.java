@@ -5,6 +5,7 @@ import com.example.authservice.repository.UserRepository;
 import com.example.authservice.support.AcmeFixture;
 import com.example.authservice.support.AcmeFixture.Acme;
 import com.example.authservice.support.AuthServiceIntegrationTest;
+import com.example.authservice.support.DevProfileFile;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -16,9 +17,9 @@ import org.springframework.boot.logging.LogLevel;
 import org.springframework.boot.logging.LoggingSystem;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
-import org.springframework.core.env.Environment;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.PropertySource;
 import org.springframework.http.HttpHeaders;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
@@ -30,16 +31,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 /**
- * US-8 AC-8.1 (phase 4, T14, E78, FU-14): with the dev profile's logging settings, SQL statements go through the
- * logging system (logger {@code org.hibernate.SQL}), so they carry the request ID and the user ID, show {@code ?}
- * placeholders only, and nothing is printed around the log pattern. The dev profile is active, but the connection
- * still comes from the test database ({@code @ServiceConnection} takes precedence over the dev URL), so this class
- * has its own context. Statements are formatted ({@code format_sql}), so one SQL entry spans several lines; its
- * continuation lines are indented and belong to that entry. The caller's authentication lookup runs before the user
- * is known, so it alone carries {@code userId=-}.
+ * US-8 AC-8.1 (phase 4, T14, E78, FU-14): with the dev profile's {@code org.hibernate.SQL} level, read from
+ * {@code application-dev.yaml}; no profile is activated (G13). SQL statements go through the logging system (logger
+ * {@code org.hibernate.SQL}), so they carry the request ID and the user ID, show {@code ?} placeholders only, and
+ * nothing is printed around the log pattern. The class uses the shared test context (the test database and the
+ * TEST-ONLY JWT secret), and no {@code .env} is loaded (E85). Statements are formatted ({@code format_sql}), so one
+ * SQL entry spans several lines; its continuation lines are indented and belong to that entry. The caller's
+ * authentication lookup runs before the user is known, so it alone carries {@code userId=-}.
  */
 @AuthServiceIntegrationTest
-@ActiveProfiles("dev")
 @ExtendWith(OutputCaptureExtension.class)
 class DevSqlLoggingTest {
 
@@ -59,7 +59,7 @@ class DevSqlLoggingTest {
     private LoggingSystem loggingSystem;
 
     @Autowired
-    private Environment environment;
+    private ConfigurableEnvironment environment;
 
     private Acme acme;
     private LogLevel sqlLevelFound;
@@ -68,10 +68,9 @@ class DevSqlLoggingTest {
     void seedAcmeAndApplyTheDevSqlLevel() {
         acme = fixture.seed();
         // Logging levels are global in the test JVM, and every context that starts later applies its own (W3), so
-        // this context's dev level is re-applied here and the level found is restored afterwards.
+        // the dev file's level is applied here and the level found is restored afterwards.
         sqlLevelFound = loggingSystem.getLoggerConfiguration(SQL_LOGGER).getConfiguredLevel();
-        loggingSystem.setLogLevel(SQL_LOGGER,
-                LogLevel.valueOf(environment.getRequiredProperty("logging.level." + SQL_LOGGER)));
+        loggingSystem.setLogLevel(SQL_LOGGER, DevProfileFile.level(SQL_LOGGER));
     }
 
     @AfterEach
@@ -119,6 +118,32 @@ class DevSqlLoggingTest {
         assertThat(log.lines()).noneMatch(line -> line.startsWith("Hibernate:"))
                 .noneMatch(line -> line.contains("ana@example.com") || line.contains("Ana Lima")
                         || line.contains(passwordHash));
+    }
+
+    @Test
+    @DisplayName("G13/E85: no property source of the test context comes from a .env file or from application-dev.yaml")
+    void noPropertySourceComesFromADotEnvFile() {
+        // Names only: the values of a property source are never printed (G13)
+        List<String> names = environment.getPropertySources().stream()
+                .map(PropertySource::getName).toList();
+        assertThat(names).isNotEmpty()
+                .noneMatch(name -> name.contains(".env"))
+                .noneMatch(name -> name.contains("application-dev"));
+        assertThat(environment.getActiveProfiles()).doesNotContain("dev");
+    }
+
+    @Test
+    @DisplayName("G13/E78: application-dev.yaml sets org.hibernate.SQL to DEBUG and holds no secret")
+    void theDevFileSetsDebugSqlAndHoldsNoSecret() {
+        List<PropertySource<?>> dev = DevProfileFile.load();
+
+        assertThat(dev).isNotEmpty().extracting(source -> source.getProperty("logging.level." + SQL_LOGGER))
+                .containsExactly("DEBUG");
+        assertThat(dev).allSatisfy(source -> {
+            assertThat(source.containsProperty("spring.datasource.password")).isFalse();
+            assertThat(source.containsProperty("app.jwtSecret")).isFalse();
+            assertThat(String.valueOf(source.getProperty("spring.jpa.show-sql"))).isNotEqualToIgnoringCase("true");
+        });
     }
 
     /** The SQL text of an entry: its continuation lines, joined with single spaces. */

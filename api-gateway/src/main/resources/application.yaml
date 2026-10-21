@@ -35,11 +35,11 @@ spring:
                 - Path=/api/orgs,/api/orgs/**
               metadata:
                 service: auth-service
-            # Provisional placeholder: scenario-service's first spec decides its final prefixes.
+            # scenario-service, decided in docs/specs/scenario-service.md D2; /api/scenarios/** is kept for existing tests.
             - id: scenarios
               uri: ${gateway.downstream.scenario-service-url}
               predicates:
-                - Path=/api/scenarios/**
+                - Path=/api/scenarios/**,/api/projects/*/features,/api/projects/*/features/**,/api/projects/*/tags
               metadata:
                 service: scenario-service
             # Provisional placeholder: report-service's first spec decides its final prefixes.

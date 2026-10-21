@@ -3,6 +3,7 @@ package com.example.authservice.qa;
 import com.example.authservice.repository.UserRepository;
 import com.example.authservice.support.AuthServiceIntegrationTest;
 import com.example.authservice.support.AcmeFixture;
+import com.example.authservice.support.DevProfileFile;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,7 +20,6 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -35,20 +35,19 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
- * qa, phase 4 US-8 and D14 (adversarial): with the dev profile's logging settings, a whole account flow that writes
+ * qa, phase 4 US-8 and D14 (adversarial): with the dev profile's SQL log level, a whole account flow that writes
  * personal data and secrets (register, log in, create an organization, invite, accept anonymously, log in again, and
  * a registration that a database constraint rejects) logs its SQL through {@code org.hibernate.SQL} with the request
  * id, and no line contains an email, a full name, a password, a password hash, an invitation token, an access token,
- * the JWT secret this context signs with, a bound value or PostgreSQL's error DETAIL. The context is the one
- * of {@code configuration/DevSqlLoggingTest} (the dev profile on the shared test database).
+ * the (TEST-ONLY) JWT secret this context signs with, a bound value or PostgreSQL's error DETAIL. The context is the
+ * shared test context, with no profile active and no {@code .env} loaded (G13, E85).
  * <p>
  * Log levels live in the one Logback configuration of the test JVM, and every test context that starts later
- * re-applies its own levels. So before the flow, this test re-applies the level that this context's dev profile
- * configures for {@code org.hibernate.SQL} (read from the context's environment), and afterwards restores the level
+ * re-applies its own levels. So before the flow, this test applies the level that the dev profile configures
+ * for {@code org.hibernate.SQL} (read from the {@code application-dev.yaml} resource) and afterwards restores the level
  * it found.
  */
 @AuthServiceIntegrationTest
-@ActiveProfiles("dev")
 @ExtendWith(OutputCaptureExtension.class)
 class QaDevLoggingTest {
 
@@ -76,8 +75,7 @@ class QaDevLoggingTest {
         fixture.seed();
         LoggerConfiguration sql = loggingSystem.getLoggerConfiguration("org.hibernate.SQL");
         sqlLevelFound = sql == null ? null : sql.getConfiguredLevel();
-        loggingSystem.setLogLevel("org.hibernate.SQL",
-                LogLevel.valueOf(environment.getRequiredProperty("logging.level.org.hibernate.SQL")));
+        loggingSystem.setLogLevel("org.hibernate.SQL", DevProfileFile.level("org.hibernate.SQL"));
     }
 
     @AfterEach

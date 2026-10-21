@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: scenario-service API
-  version: 1.0.1
+  version: 1.0.4
   summary: Gherkin features, their versions and parsed structure, derived test cases and tags, per project.
   description: |
     Contract C1 of `docs/specs/scenario-service.md` (phase 1). It documents every operation of decision D2, the
@@ -9,6 +9,46 @@ info:
     paths, status codes, `code` values and the Problem members `parseErrors` and `currentVersion` come from the
     spec's acceptance criteria (AC-x.y) and are binding. The wording of `detail`, of validation `message` texts and of
     parse error `message` texts is not part of the contract.
+
+    ## Changes in 1.0.4 (task T15c, 2026-10-19)
+
+    1.0.4: fix round 1; only UTF-8 encoding pragmas; at most 10,000 elements per feature; no shape changes.
+    - A `# encoding:` pragma that names any charset other than UTF-8 is 422 `GHERKIN_INVALID` with exactly one parse
+      error at line 1, column 1: `Only UTF-8 encoding is supported` (AC-1.19; before, 500 or a wrongly decoded text).
+    - A valid text with more than 10,000 elements is 400 `VALIDATION_FAILED` with an `errors` entry for `source`,
+      checked at the new order step 7a (AC-1.20). The definition of an element is in `GherkinSource`.
+    - Scenario and example-row ids are matched on structured values, so names containing separators can't collide
+      (AC-3.15). No rule changes; the earlier implementation could give a 409 `CONFLICT` or keep a row id wrongly.
+    - The access check forwards the caller's token as `Authorization: Bearer <token>` (the scheme normalised to
+      `Bearer`), not the header exactly as sent.
+
+    ## Changes in 1.0.3 (task T14, 2026-10-18)
+
+    1.0.3: synced with the implementation (tasks T3–T13). No shape, path, status or code changes.
+    - `VersionMessage`: trimming removes Unicode-blank characters as the spec's rule T2 defines them (Unicode
+      whitespace, NBSP, U+200B–U+200D, U+2060, U+FEFF). NEL (U+0085) is not among them: it is a control character,
+      so a message with a NEL, even at its end, is 400 `VALIDATION_FAILED` (review point A, pm decision 2026-10-18).
+    - The gateway route of the spec's GE1 is in place (gateway contract 0.2.3). The gateway may reorder query
+      parameters and percent-encode characters such as `@` (`tag=%40smoke`); the decoded values reach
+      scenario-service unchanged.
+
+    ## Changes in 1.0.2 (task T1c, 2026-10-18)
+
+    1.0.2: D20 alignment with auth-service phase 4: ICU case-insensitive path comparison; invisible path parts
+    rejected; ids, `{version}` and `archived` untrimmed; strict string types stated for every string field; 'no
+    Feature' only without parser errors. No shape changes.
+    - `path` uniqueness is compared by ICU root lower case, the same expression as the database's unique index, so
+      `İzmir` collides with `i̇zmir` but not with `izmir` (AC-1.17).
+    - `path` rejects a leading Unicode-blank character, and a segment or a file name made only of such characters;
+      every string field rejects U+0000 and lone surrogates (AC-1.16).
+    - Path ids, `{version}` and `archived` are matched exactly as received; leading or trailing whitespace is 400
+      `MALFORMED_REQUEST` (AC-7.14).
+    - A JSON number (including a fraction) or boolean for `path`, `source` or `message` is 400 `MALFORMED_REQUEST`;
+      `null` stays a validation error (AC-7.15).
+    - The "no Feature" parse error is reported only when the parser reports no error (AC-1.15).
+    - Timestamps are taken from the service clock, in UTC (AC-1.18).
+    - The US-8 logging ACs are now named on the operations they observe (AC-8.1 to AC-8.11, AC-8.14); logging never
+      changes a response.
 
     ## Changes in 1.0.1 (task T1b, 2026-10-14)
 
@@ -22,17 +62,17 @@ info:
       "no Feature" parse error (AC-1.13); empty Examples blocks (AC-4.6); each tag listed once (AC-5.8); the tag
       filter on archived features (AC-6.10); the case-insensitive bearer scheme (AC-7.13).
 
-    ## Implementation status (1.0.1, task T1b, 2026-10-14)
+    ## Implementation status (1.0.3, task T14, 2026-10-18)
 
-    Contract only: no operation is implemented yet. The operations are built in tasks T3–T12 of the spec. Task T14
-    syncs this file with the final behaviour (1.0.1 if nothing changed, otherwise 1.0.2 with a change note).
+    Every operation is implemented (spec tasks T3–T12) and routed through the gateway (T13). This file matches the
+    implementation; the acceptance tests named by AC id in `scenario-service/src/test` cover each operation.
 
     ## Calling the service
 
-    - **Through the gateway:** `http://localhost:8080` (normal use), once the gateway route of the spec's GE1
-      (task T13) is in place. The route `scenarios` then forwards `/api/projects/*/features`,
-      `/api/projects/*/features/**` and `/api/projects/*/tags` to scenario-service. External paths equal service
-      paths; the gateway does no rewriting.
+    - **Through the gateway:** `http://localhost:8080` (normal use). The route `scenarios` (spec GE1, task T13)
+      forwards `/api/projects/*/features`, `/api/projects/*/features/**` and `/api/projects/*/tags` to
+      scenario-service. External paths equal service paths; the gateway doesn't rewrite paths, but it may reorder
+      query parameters and percent-encode characters such as `@` (the decoded values are unchanged).
       - The gateway checks the token first. A missing or invalid token gets the **gateway's** 401 Problem, which has
         `requestId` but no `code`, and the request never reaches scenario-service.
       - Every other `/api/projects/**` path (for example `/api/projects/{projectId}` or `/api/projects/1`) isn't
@@ -56,8 +96,9 @@ info:
     ## Authorization (D3, D4, D5)
 
     - Every request to a project-scoped path asks auth-service which role the caller has in the project: the access
-      check C5 (`GET /internal/projects/{projectId}/access` on auth-service, contract 1.2.1). The caller's
-      `Authorization` header and the request ID are forwarded unchanged (AC-7.2).
+      check C5 (`GET /internal/projects/{projectId}/access` on auth-service, contract 1.2.1). The caller's token is
+      forwarded as `Authorization: Bearer <token>` (the token unchanged, the scheme normalised to `Bearer` whatever
+      letter case the client sent), and so is the request ID (AC-7.2).
     - Roles are the caller's **effective** project roles, ranked `ADMIN` 4 > `MEMBER` 3 > `TESTER` 2 > `READER` 1.
       Organization `OWNER` and `ADMIN` are implicit project `ADMIN`. Each role includes the ones below it.
     - **No caching:** the role is checked on every request, so a removal or demotion applies to the next request
@@ -98,8 +139,10 @@ info:
     - Invalid text is 422 `GHERKIN_INVALID`, and **nothing is stored** (AC-1.4, AC-3.6). The Problem has the member
       `parseErrors`: one entry per error the parser reports, each with a 1-based `line` and `column` and the
       parser's `message`, sorted by line, then column (AC-1.5). A column the parser reports as 0 is reported as 1.
-      A text without a Feature, including whitespace-only or comment-only text, has exactly one entry: line 1,
-      column 1, message `The text has no Feature` (AC-1.13). Field errors are never in `parseErrors`, and Gherkin errors
+      **Only when the parser reports no error**, a text without a Feature (including whitespace-only or
+      comment-only text) has exactly one entry: line 1, column 1, message `The text has no Feature` (AC-1.13). When
+      the parser reports errors, only its errors are listed, never the "no Feature" entry: `Given a step` alone gives
+      the parser's error at line 1, column 1 (AC-1.15). Field errors are never in `parseErrors`, and Gherkin errors
       are never in `errors`.
     - **Stored exactly as sent:** line endings, trailing spaces and a missing final newline come back byte for byte
       (AC-2.6).
@@ -145,16 +188,23 @@ info:
       letter case. They are normalised to lower case. Anything else is 400 `MALFORMED_REQUEST`, including forms
       Java's `UUID.fromString` would accept, such as `1-1-1-1-1` (AC-2.4, AC-7.6). A malformed project id is
       rejected before the access check.
+    - **Matched exactly as received:** path ids, `{version}` and `archived` are never trimmed. Leading or trailing
+      whitespace (for example `%20` or `%09`: `/api/projects/%20{projectId}/features`, `/versions/%201`,
+      `archived=%20true`) is 400 `MALFORMED_REQUEST`, and no access check is made (AC-7.14).
     - **Lengths count Unicode code points**, not UTF-16 units or bytes.
-    - **No string field** may contain U+0000 or a lone surrogate (JSON can carry one only as an escape such as
-      `"\ud800"`): 400 `VALIDATION_FAILED` with an `errors` entry for the field (AC-1.7). `path` and `message` reject
-      every control character too (U+0000–U+001F and U+007F–U+009F; for `message`, after trimming); `source` doesn't, because Gherkin files contain tabs and line breaks.
+    - **No string field** (`path`, `source`, `message`) may contain U+0000 or a lone surrogate (JSON can carry one
+      only as an escape such as `"\ud800"`), because the database can't store them: 400 `VALIDATION_FAILED` with an
+      `errors` entry for the field (AC-1.7, AC-1.16). `path` and `message` reject every control character too
+      (U+0000–U+001F and U+007F–U+009F; for `message`, after trimming); `source` doesn't, because Gherkin files
+      contain tabs and line breaks. `path` also rejects invisible parts (schema `FeaturePath`, AC-1.16).
     - **JSON types are strict:** a number or boolean where a string is expected (for example `"source": 123`) is 400
-      `MALFORMED_REQUEST` (AC-7.9), as is an array or object. A JSON `null` counts as a missing value and is
-      `VALIDATION_FAILED`.
+      `MALFORMED_REQUEST` (AC-7.9), as is an array or object. This holds for every string field: a JSON number
+      (including a fraction such as `1.5`) or boolean for `path`, `source` or `message` is 400 `MALFORMED_REQUEST`
+      (AC-7.15). A JSON `null` is not a type error: it counts as a missing value, so it is `VALIDATION_FAILED` for a
+      required field (for example `"path": null`, AC-7.15) and means no message for `message`.
     - **One spelling per value:** `baseVersion` is a JSON integer from 1 to 2147483647; `{version}` matches
       `^[1-9][0-9]{0,9}$` and is at most 2147483647; `archived` is exactly `true` or `false`. Any other spelling is
-      400 `MALFORMED_REQUEST` (AC-7.12).
+      400 `MALFORMED_REQUEST` (AC-7.12), including the right value with leading or trailing whitespace (AC-7.14).
     - **Validation runs before the access check** (D16, as in auth-service). A caller without access who sends an
       invalid body gets 400; it reveals nothing about the project.
 
@@ -169,8 +219,8 @@ info:
 
     | Situation | Status | `code` | Extra member |
     |---|---|---|---|
-    | Bean Validation failure on a body field or a query parameter | 400 | `VALIDATION_FAILED` | `errors` |
-    | Unreadable JSON; a number, boolean, array or object where a string is expected; a `baseVersion` that is a JSON string (`"1"`), a fraction (`1.5`, `1.0`) or above 2147483647; a malformed id in the path; a `{version}` with leading zeros, a sign, 0 or above 2147483647; an `archived` value other than `true` or `false` | 400 | `MALFORMED_REQUEST` | — |
+    | Bean Validation failure on a body field or a query parameter; or a valid text with more than 10,000 elements (`errors` entry `source`, order step 7a, AC-1.20) | 400 | `VALIDATION_FAILED` | `errors` |
+    | Unreadable JSON; a number, boolean, array or object where a string is expected, so a JSON number (including a fraction) or boolean for `path`, `source` or `message` (a JSON `null` is not a type error: `VALIDATION_FAILED` for `path` or `source`, no message for `message`; AC-7.15); a `baseVersion` that is a JSON string (`"1"`), a fraction (`1.5`, `1.0`) or above 2147483647; a malformed id in the path; a `{version}` with leading zeros, a sign, 0 or above 2147483647; an `archived` value other than `true` or `false`; a path id, `{version}` or `archived` with leading or trailing whitespace (for example `%20`, `%09`), since they are matched exactly as received (AC-7.14) | 400 | `MALFORMED_REQUEST` | — |
     | No or invalid token; or the access check answered 401 | 401 | `UNAUTHENTICATED` | — |
     | No access to the project, a role that is too low, or an unknown project | 403 | `FORBIDDEN` | — |
     | Unknown path | 404 | `NOT_FOUND` | — |
@@ -178,14 +228,14 @@ info:
     | No such version of the feature | 404 | `VERSION_NOT_FOUND` | — |
     | Method not supported on a known path | 405 | `METHOD_NOT_ALLOWED` | — |
     | No acceptable response media type for the `Accept` header | 406 | `NOT_ACCEPTABLE` | — |
-    | Another active feature in the project has that path (ignoring letter case) | 409 | `FEATURE_PATH_TAKEN` | — |
+    | Another active feature in the project has that path (ignoring letter case by ICU root lower case; schema `FeaturePath`) | 409 | `FEATURE_PATH_TAKEN` | — |
     | `baseVersion` isn't the current version | 409 | `VERSION_CONFLICT` | `currentVersion` |
     | Saving an archived feature | 409 | `FEATURE_ARCHIVED` | — |
     | A write on an archived project | 409 | `PROJECT_ARCHIVED` | — |
     | A lock that can't be acquired in time, a deadlock, or another unique-constraint conflict | 409 | `CONFLICT` | — |
     | Unsupported `Content-Type` | 415 | `UNSUPPORTED_MEDIA_TYPE` | — |
     | Any other 4xx that Spring MVC raises itself and that no row above covers (for example a missing required header) | Spring's status, unchanged | `MALFORMED_REQUEST` | — |
-    | The text isn't valid Gherkin | 422 | `GHERKIN_INVALID` | `parseErrors` |
+    | The text isn't valid Gherkin: the parser reports errors (only those are listed), or, only when it reports none, the text has no Feature (one entry: line 1, column 1, `The text has no Feature`; AC-1.13, AC-1.15); or a `# encoding:` pragma other than UTF-8 (one entry: line 1, column 1, `Only UTF-8 encoding is supported`; AC-1.19) | 422 | `GHERKIN_INVALID` | `parseErrors` |
     | Anything unexpected | 500 | `INTERNAL_ERROR` | — |
     | The access check couldn't be completed | 503 | `ACCESS_CHECK_UNAVAILABLE` | — |
 
@@ -201,6 +251,9 @@ info:
     5. 404 `FEATURE_NOT_FOUND`, then 404 `VERSION_NOT_FOUND`.
     6. Save: 409 `FEATURE_ARCHIVED`, then 409 `VERSION_CONFLICT`.
     7. Create and save: 422 `GHERKIN_INVALID`.
+    7a. Create and save: 400 `VALIDATION_FAILED` (`errors` entry `source`) when a valid text has more than 10,000
+        elements (AC-1.20). It needs the parse, so it comes after the access check and after parse errors, unlike the
+        other 400s.
     8. Create, save with a new path, restore: 409 `FEATURE_PATH_TAKEN`.
 
     Notes:
@@ -220,7 +273,13 @@ info:
     - scenario-service never emits CORS headers (`Access-Control-*`) or an `X-Request-Id` response header. The
       gateway is the CORS authority.
     - Identity comes only from the token. An `X-User-Id` header from the client is ignored (AC-7.8).
-    - Timestamps are UTC instants with a `Z` offset and at most microsecond precision (schema `Timestamp`).
+    - Timestamps are UTC instants with a `Z` offset and at most microsecond precision, taken from the service clock
+      (schema `Timestamp`, AC-1.18).
+    - Operational logs (D17) never change a response. Every log line of a request carries its request ID (the valid
+      `X-Request-Id`, otherwise a generated UUID) and the caller's user id, and no line contains Gherkin text, paths,
+      names, tags, version messages, parse error messages, tokens or e-mail addresses. The US-8 ACs observe this
+      through the operations named in their descriptions: AC-8.1, AC-8.2, AC-8.3, AC-8.4, AC-8.5, AC-8.6, AC-8.7,
+      AC-8.8, AC-8.9, AC-8.10, AC-8.11, AC-8.14.
     - `createdBy` and `updatedBy` are auth-service user ids. scenario-service stores no names or emails; clients
       resolve names from auth-service.
     - Lists are not paginated in phase 1. Order: features by path lower-cased, in code-point order, then by id;
@@ -267,8 +326,12 @@ paths:
 
         An empty list is `[]`.
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (project id, `archived`; AC-7.12), then 400
-        `VALIDATION_FAILED` (`tag`); the access check (503, 401, 403).
+        The project id and `archived` are matched exactly as received: leading or trailing whitespace (`%20`, `%09`)
+        is 400 `MALFORMED_REQUEST` (AC-7.14). The US-8 logging ACs AC-8.2, AC-8.4, AC-8.6, AC-8.8, AC-8.10 and
+        AC-8.11 observe this operation; logging never changes its response.
+
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (project id, `archived`; AC-7.12,
+        AC-7.14), then 400 `VALIDATION_FAILED` (`tag`); the access check (503, 401, 403).
       parameters:
         - $ref: '#/components/parameters/Archived'
         - $ref: '#/components/parameters/Tag'
@@ -337,13 +400,25 @@ paths:
         Parses `source` (D8). Valid text creates the feature with version 1 (by the caller, with `message`), derives
         its name, description, language, tags and structure, and returns the full feature with `Location` (AC-1.1,
         AC-1.2). Invalid text is 422 `GHERKIN_INVALID` with `parseErrors`, and nothing is stored (AC-1.4,
-        AC-1.13).
+        AC-1.13). The "no Feature" entry appears only when the parser reports no error; otherwise only the parser's
+        errors are listed (AC-1.15). A `# encoding:` pragma other than UTF-8 is one parse error at 1:1 (AC-1.19). A
+        valid text with more than 10,000 elements is 400 `VALIDATION_FAILED` (`source`), and nothing is stored
+        (AC-1.20).
 
-        The path follows the `FeaturePath` rules (400 `VALIDATION_FAILED`, AC-1.6, AC-1.14). It must be free among
-        the project's **active** features, ignoring letter case (409
-        `FEATURE_PATH_TAKEN`, AC-1.8). The same path may exist in another project (AC-1.9) and on an archived feature
-        (AC-6.4). Of several simultaneous creations with one path, exactly one succeeds and every other one gets 409
+        The path follows the `FeaturePath` rules (400 `VALIDATION_FAILED`, AC-1.6, AC-1.14), including no invisible
+        parts; no string field may contain U+0000 or a lone surrogate (AC-1.16). It must be free among the project's
+        **active** features, ignoring letter case by ICU root lower case (409 `FEATURE_PATH_TAKEN`, AC-1.8,
+        AC-1.17). The same path may exist in another project (AC-1.9) and on an archived feature (AC-6.4). Of several
+        simultaneous creations with one path, exactly one succeeds and every other one gets 409
         `FEATURE_PATH_TAKEN` (AC-1.10).
+
+        `path`, `source` and `message` must be JSON strings: a number (including a fraction) or boolean is 400
+        `MALFORMED_REQUEST`, and `null` for `path` or `source` is 400 `VALIDATION_FAILED` (AC-7.15). The project id is matched exactly as
+        received (AC-7.14). `createdAt`, `updatedAt` and version 1's `createdAt` are taken from the service clock, in
+        UTC (AC-1.18).
+
+        The US-8 logging ACs AC-8.1, AC-8.3, AC-8.5, AC-8.9 and AC-8.14 observe this operation; logging never changes
+        its response.
 
         **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`, then 400 `VALIDATION_FAILED`; the access
         check (503, 401, 403); 409 `PROJECT_ARCHIVED`; 422 `GHERKIN_INVALID`; 409 `FEATURE_PATH_TAKEN`.
@@ -414,8 +489,9 @@ paths:
         '409':
           description: |
             `PROJECT_ARCHIVED`: the project is archived (AC-7.7). `FEATURE_PATH_TAKEN`: another active feature in the
-            project has this path, ignoring letter case (AC-1.8, AC-1.10). `CONFLICT`: a lock couldn't be acquired in
-            time, or another unique conflict.
+            project has this path, ignoring letter case by ICU root lower case (AC-1.8, AC-1.10, AC-1.17); a path
+            conflict is always this code, never `CONFLICT`. `CONFLICT`: a lock couldn't be acquired in time, or
+            another unique conflict.
           content:
             application/problem+json:
               schema:
@@ -453,10 +529,11 @@ paths:
         `tags`, and its structure (`children`) parsed from the current version (AC-1.2). Absent names and descriptions
         are `""`, an Examples block without a table has empty `header` and `rows` (AC-4.6), and each tag is listed
         once per element (AC-5.8). An unknown feature, or a feature of another project, is 404 `FEATURE_NOT_FOUND`
-        (AC-2.4).
+        (AC-2.4). The ids are matched exactly as received: leading or trailing whitespace is 400
+        `MALFORMED_REQUEST` (AC-7.14). AC-8.7 observes this operation's logs.
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403); 404
-        `FEATURE_NOT_FOUND`.
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`.
       responses:
         '200':
           description: The feature.
@@ -496,14 +573,23 @@ paths:
         - `baseVersion` must be the current version; otherwise 409 `VERSION_CONFLICT` with `currentVersion`, and
           nothing changes (AC-3.5, AC-3.11). It must be a JSON integer from 1 to 2147483647; any other spelling is
           400 `MALFORMED_REQUEST` (AC-7.12).
-        - A changed `source` must be valid Gherkin (422 `GHERKIN_INVALID`, nothing changes, AC-3.6). It becomes the
+        - `path`, `source` and `message` follow the same rules as on creation: no U+0000 or lone surrogate, no
+          invisible path parts (400 `VALIDATION_FAILED`, AC-1.16); JSON strings only, so a number (including a
+          fraction) or boolean is 400 `MALFORMED_REQUEST`, and `null` for `path` or `source` is 400
+          `VALIDATION_FAILED` (AC-7.15).
+        - A changed `source` must be valid Gherkin (422 `GHERKIN_INVALID`, nothing changes, AC-3.6; the "no Feature"
+          entry only when the parser reports no error, AC-1.15; only UTF-8 encoding pragmas, AC-1.19) and have at
+          most 10,000 elements (400 `VALIDATION_FAILED`, `source`, AC-1.20). It becomes the
           next version, by the caller, with `message` trimmed (AC-3.14), and the structure, tags and test cases
-          follow it (AC-3.1, AC-4.4, AC-5.2). Scenario and example-row ids follow the stability rules (AC-3.2 to AC-3.4).
+          follow it (AC-3.1, AC-4.4, AC-5.2). Scenario and example-row ids follow the stability rules (AC-3.2 to AC-3.4),
+          matched on structured values, so names that contain separators never collide (AC-3.15).
         - A `source` identical to the current version's text, byte for byte, creates no version: `currentVersion` and
           `updatedAt` stay the same, and `message` isn't stored (AC-3.7).
         - A `path` different from the current one becomes the feature's path. It must be free among the project's
-          other active features, ignoring letter case (409 `FEATURE_PATH_TAKEN`, AC-3.12). A path change alone
-          creates no version (AC-3.13).
+          other active features, ignoring letter case by ICU root lower case (409 `FEATURE_PATH_TAKEN`, AC-3.12,
+          AC-1.17). A path change alone creates no version (AC-3.13).
+        - The ids are matched exactly as received: leading or trailing whitespace is 400 `MALFORMED_REQUEST`
+          (AC-7.14).
 
         `updatedAt` and `updatedBy` are changed by a new version, a path change (even without a new version), and a real
         archive or restore; unchanged by an identical save, archiving an archived feature, or restoring an active one.
@@ -547,8 +633,8 @@ paths:
             `PROJECT_ARCHIVED`: the project is archived (AC-7.7). `FEATURE_ARCHIVED`: the feature is archived; restore
             it first (AC-6.2). `VERSION_CONFLICT`: `baseVersion` isn't the current version; the Problem has
             `currentVersion` (AC-3.5, AC-3.11). `FEATURE_PATH_TAKEN`: another active feature has the new path,
-            ignoring letter case (AC-3.12). `CONFLICT`: a lock couldn't be acquired in time, or another unique
-            conflict.
+            ignoring letter case by ICU root lower case (AC-3.12, AC-1.17). `CONFLICT`: a lock couldn't be acquired in
+            time, or another unique conflict.
           content:
             application/problem+json:
               schema:
@@ -606,10 +692,11 @@ paths:
         for another feature (AC-6.1 to AC-6.4). Its ids are kept. Idempotent: archiving an archived feature is 200 with
         the unchanged `archivedAt` (AC-6.8). `updatedAt` and `updatedBy` are changed by a new version, a path change
         (even without a new version), and a real archive or restore; unchanged by an identical save, archiving an
-        archived feature, or restoring an active one (AC-6.9). There is no hard delete.
+        archived feature, or restoring an active one (AC-6.9). There is no hard delete. The ids are matched exactly
+        as received: leading or trailing whitespace is 400 `MALFORMED_REQUEST` (AC-7.14).
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403); 409
-        `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND` (AC-6.7).
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 409 `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND` (AC-6.7).
       responses:
         '200':
           description: The feature, archived.
@@ -658,14 +745,16 @@ paths:
         (409 `PROJECT_ARCHIVED`). No request body.
 
         Clears `archivedAt`. The feature is back in the feature list and the tag catalogue, with the same feature,
-        scenario and example-row ids (AC-6.5). If another active feature now has its path, ignoring letter case, the
-        answer is 409 `FEATURE_PATH_TAKEN` and the feature stays archived (AC-6.4). Idempotent: restoring an active
-        feature is 200 with `archivedAt` null and `updatedAt` unchanged (AC-6.8). `updatedAt` and `updatedBy` are
-        changed by a new version, a path change (even without a new version), and a real archive or restore; unchanged
-        by an identical save, archiving an archived feature, or restoring an active one (AC-6.9).
+        scenario and example-row ids (AC-6.5). If another active feature now has its path, ignoring letter case by
+        ICU root lower case, the answer is 409 `FEATURE_PATH_TAKEN` and the feature stays archived (AC-6.4).
+        Idempotent: restoring an active feature is 200 with `archivedAt` null and `updatedAt` unchanged (AC-6.8).
+        `updatedAt` and `updatedBy` are changed by a new version, a path change (even without a new version), and a
+        real archive or restore; unchanged by an identical save, archiving an archived feature, or restoring an active
+        one (AC-6.9). The ids are matched exactly as received: leading or trailing whitespace is 400
+        `MALFORMED_REQUEST` (AC-7.14).
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403); 409
-        `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND` (AC-6.7); 409 `FEATURE_PATH_TAKEN`.
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 409 `PROJECT_ARCHIVED`; 404 `FEATURE_NOT_FOUND` (AC-6.7); 409 `FEATURE_PATH_TAKEN`.
       responses:
         '200':
           description: The feature, active.
@@ -686,7 +775,7 @@ paths:
         '409':
           description: |
             `PROJECT_ARCHIVED`: the project is archived. `FEATURE_PATH_TAKEN`: another active feature has this
-            feature's path, ignoring letter case; the feature stays archived (AC-6.4). `CONFLICT`: a lock couldn't be
+            feature's path, ignoring letter case by ICU root lower case; the feature stays archived (AC-6.4). `CONFLICT`: a lock couldn't be
             acquired in time, or another unique conflict.
           content:
             application/problem+json:
@@ -718,10 +807,11 @@ paths:
         (AC-6.1).
 
         Lists every version, newest first, with its number, author, time and message, without the text (AC-1.1,
-        AC-3.1). Versions are never changed or deleted.
+        AC-3.1). Versions are never changed or deleted. The ids are matched exactly as received: leading or trailing
+        whitespace (for example `{featureId}%20`) is 400 `MALFORMED_REQUEST` (AC-7.14).
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403); 404
-        `FEATURE_NOT_FOUND`.
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`.
       responses:
         '200':
           description: Every version of the feature, newest first.
@@ -774,10 +864,12 @@ paths:
         Returns the version's metadata and its `source`, exactly as it was saved (AC-3.1). Only the text: the parsed
         structure exists for the current version only (`getFeature`). A version number the feature doesn't have is 404
         `VERSION_NOT_FOUND`; a `{version}` that isn't a positive integer in its one spelling (for example `0`, `abc`, `01`, `+1`,
-        `2147483648`) is 400 `MALFORMED_REQUEST` (AC-3.9, AC-7.12).
+        `2147483648`) is 400 `MALFORMED_REQUEST` (AC-3.9, AC-7.12). The ids and `{version}` are matched exactly as
+        received: leading or trailing whitespace (for example `/versions/%201` or `/versions/1%20`) is 400
+        `MALFORMED_REQUEST` (AC-7.14).
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403); 404
-        `FEATURE_NOT_FOUND`; 404 `VERSION_NOT_FOUND`.
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`; 404 `VERSION_NOT_FOUND`.
       responses:
         '200':
           description: The version with its text.
@@ -848,10 +940,11 @@ paths:
           a table) has none (AC-4.3, AC-4.6).
 
         Test cases come in text order (AC-4.1). An empty list is `[]` (AC-1.11). See the `TestCase` schema for names,
-        tags and steps.
+        tags and steps. The ids are matched exactly as received: leading or trailing whitespace is 400
+        `MALFORMED_REQUEST` (AC-7.14).
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403); 404
-        `FEATURE_NOT_FOUND`.
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403); 404 `FEATURE_NOT_FOUND`.
       responses:
         '200':
           description: The test cases, in text order.
@@ -946,9 +1039,11 @@ paths:
         features that use it (AC-5.1). Sorted by name in code-point (case-sensitive) order. Tags are compared
         case-sensitively, so `@Smoke` and `@smoke` are different tags (AC-5.3). A tag written twice on one element counts once (AC-5.8). The catalogue follows saves at once: a
         tag no longer used anywhere disappears (AC-5.2). Archived features don't count (AC-6.3). Only the project's own
-        tags are listed (AC-5.6). An empty catalogue is `[]`.
+        tags are listed (AC-5.6). An empty catalogue is `[]`. The project id is matched exactly as received: leading
+        or trailing whitespace is 400 `MALFORMED_REQUEST` (AC-7.14).
 
-        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST`; the access check (503, 401, 403).
+        **Which error wins:** 401 `UNAUTHENTICATED`; 400 `MALFORMED_REQUEST` (AC-7.14); the access check (503, 401,
+        403).
       responses:
         '200':
           description: The tags in use, sorted by name.
@@ -1024,8 +1119,9 @@ components:
       required: true
       description: |
         The project's id (an auth-service project). A canonical UUID in either letter case, normalised to lower case.
-        Anything else is 400 `MALFORMED_REQUEST`, and no access check is made (AC-7.6). An unknown project is 403
-        `FORBIDDEN`, the same as no access.
+        Anything else is 400 `MALFORMED_REQUEST`, and no access check is made (AC-7.6). Matched exactly as received,
+        never trimmed: leading or trailing whitespace (for example `%20` or `%09`) is 400 `MALFORMED_REQUEST`
+        (AC-7.14). An unknown project is 403 `FORBIDDEN`, the same as no access.
       schema:
         $ref: '#/components/schemas/CanonicalUuid'
     FeatureId:
@@ -1034,7 +1130,8 @@ components:
       required: true
       description: |
         The feature's id. A canonical UUID in either letter case, normalised to lower case. Anything else is 400
-        `MALFORMED_REQUEST` (AC-2.4).
+        `MALFORMED_REQUEST` (AC-2.4). Matched exactly as received, never trimmed: leading or trailing whitespace (for
+        example `%20` or `%09`) is 400 `MALFORMED_REQUEST` (AC-7.14).
       schema:
         $ref: '#/components/schemas/CanonicalUuid'
     Version:
@@ -1044,7 +1141,8 @@ components:
       description: |
         A version number of the feature: a positive integer without leading zeros or sign, at most 2147483647;
         leading zeros, a sign, 0 or a larger value is 400 `MALFORMED_REQUEST`, as is anything else (for example
-        `abc`) (AC-3.9, AC-7.12).
+        `abc`) (AC-3.9, AC-7.12). Matched exactly as received, never trimmed: leading or trailing whitespace (for
+        example `%201` or `1%20`) is 400 `MALFORMED_REQUEST` (AC-7.14).
       schema:
         type: string
         pattern: '^[1-9][0-9]{0,9}$'
@@ -1056,7 +1154,8 @@ components:
       description: |
         `false` (the default): list active features only. `true`: list archived features only (AC-6.1). Exactly
         `true` or `false`, in lower case; `yes`, `on`, `1`, `True`, `maybe` or an empty value is 400
-        `MALFORMED_REQUEST` (AC-7.9, AC-7.12).
+        `MALFORMED_REQUEST` (AC-7.9, AC-7.12). Matched exactly as received, never trimmed: leading or trailing
+        whitespace (for example `archived=%20true` or `archived=false%20`) is 400 `MALFORMED_REQUEST` (AC-7.14).
       schema:
         type: string
         enum:
@@ -1110,7 +1209,8 @@ components:
       pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$'
       description: |
         A UTC instant in ISO-8601 with a `Z` offset and at most microsecond precision (database pattern item 11), for
-        example `2026-10-14T09:30:00.123456Z`. Clients must accept 0 to 6 fractional digits, and compare instants, not strings.
+        example `2026-10-14T09:30:00.123456Z`. Taken from the service clock, UTC (AC-1.18). Clients must accept 0 to 6
+        fractional digits (`2026-10-14T09:30:00Z` is valid), and compare instants, not strings.
       example: '2026-10-14T09:30:00.123456Z'
     FeaturePath:
       type: string
@@ -1119,19 +1219,30 @@ components:
       pattern: '^(?!\s)(?!.*\s$)(?:(?!\.\.?/)[^/\\\u0000-\u001F\u007F-\u009F]+/)*[^/\\\u0000-\u001F\u007F-\u009F]+\.feature$'
       description: |
         The feature's file path in the project, for example `features/checkout/payment.feature` (D10). The rules
-        below are normative; the `pattern` is a convenience for clients and doesn't cover lone surrogates.
+        below are normative; the `pattern` is a convenience for clients and doesn't cover lone surrogates or the
+        Unicode-blank rules below (it only rejects ECMAScript `\s` at the start or the end).
         - 1 to 1024 code points.
         - Segments separated by `/`. The last segment ends in `.feature` exactly, in lower case (`.FEATURE` is 400),
           after at least one other character (`features/.feature` is 400) (AC-1.14).
         - Not allowed: a leading `/`; an empty segment (`a//b.feature`); a `.` or `..` segment; a backslash; a control
-          character (control characters are U+0000–U+001F and U+007F–U+009F); a lone surrogate; leading or trailing whitespace in the whole path.
-          Spaces inside segments are allowed.
+          character (control characters are U+0000–U+001F and U+007F–U+009F); a lone surrogate (AC-1.16); leading or
+          trailing whitespace in the whole path; a leading Unicode-blank character (Unicode whitespace, NBSP,
+          U+200B–U+200D, U+2060, U+FEFF); a segment, or a file name before `.feature`, made only of such characters
+          (for example `features/ /a.feature`, `features/<U+200B>/a.feature`, `features/<U+00A0>.feature`) (AC-1.16).
+          Spaces and other blank characters inside a segment that has other characters are allowed
+          (`features/my address.feature`).
         - Stored and returned as sent (letter case kept).
-        - Unique among the project's **active** features, compared case-insensitively, so `Features/Checkout/PAYMENT.feature`
-          collides with `features/checkout/payment.feature` (409 `FEATURE_PATH_TAKEN`, AC-1.8). An archived feature's
-          path is free (AC-6.4). The same path may exist in another project (AC-1.9).
+        - Unique among the project's **active** features, compared case-insensitively by ICU root lower case
+          (PostgreSQL `lower(… COLLATE "und-x-icu")`, the same as the unique index), which equals Java's
+          `toLowerCase(Locale.ROOT)` for Unicode 13, so `İzmir` collides with `i̇zmir` (`i` + U+0307) but not with
+          `izmir` (AC-1.17). So `Features/Checkout/PAYMENT.feature` collides with `features/checkout/payment.feature`
+          (409 `FEATURE_PATH_TAKEN`, AC-1.8). Characters added in Unicode 14 or later are compared as the database's
+          ICU does, for example U+2C2F collides with U+2C5F (AC-1.17). A collision is always 409
+          `FEATURE_PATH_TAKEN`, never `CONFLICT`. An archived feature's path is free (AC-6.4). The same path may exist
+          in another project (AC-1.9).
 
-        An invalid path is 400 `VALIDATION_FAILED` with an `errors` entry for `path` (AC-1.6, AC-1.14).
+        An invalid path is 400 `VALIDATION_FAILED` with an `errors` entry for `path` (AC-1.6, AC-1.14, AC-1.16). A
+        JSON number or boolean is 400 `MALFORMED_REQUEST`; `null` is `VALIDATION_FAILED` (AC-7.15).
       example: features/checkout/payment.feature
     GherkinSource:
       type: string
@@ -1140,11 +1251,24 @@ components:
       description: |
         The full Gherkin text of the feature file (D8). Required and not empty, at most 1,000,000 code points, without
         U+0000 and without lone surrogates; otherwise 400 `VALIDATION_FAILED` with an `errors` entry for `source`
-        (AC-1.7). Other control characters (tabs, line feeds, carriage returns, and any other in doc strings) are
-        allowed: this is the spec's named deviation from database pattern item 18 (rule T1).
+        (AC-1.7, AC-1.16). Other control characters (tabs, line feeds, carriage returns, and any other in doc strings)
+        are allowed: this is the spec's named deviation from database pattern item 18 (rule T1). Never trimmed and
+        never checked for blank content: a whitespace-only text passes this check and is then 422 `GHERKIN_INVALID`.
+        A JSON number or boolean is 400 `MALFORMED_REQUEST`; `null` is `VALIDATION_FAILED` (AC-7.15).
 
         Then the text must be valid Gherkin (422 `GHERKIN_INVALID`). It is stored exactly as sent and comes back byte
         for byte (AC-2.6).
+
+        **Encoding (AC-1.19).** The text is Unicode already, so the only accepted `# encoding:` pragma is UTF-8 (in
+        any letter case, or an alias that resolves to UTF-8). A pragma that names any other charset, or a name that
+        isn't a charset at all (`foo`, `-`, `ISO-8859-1`), is 422 `GHERKIN_INVALID` with exactly one parse error at
+        line 1, column 1: `Only UTF-8 encoding is supported`. Like Cucumber, only a pragma among the leading comment
+        and blank lines counts.
+
+        **Size (AC-1.20).** At most 10,000 elements. Elements are every Rule, Background, Scenario, Scenario Outline,
+        Examples block, step and example row, plus each tag on each of them (a tag written twice on one element counts
+        once). Data-table cells and doc-string text don't count. More is 400 `VALIDATION_FAILED` with an `errors`
+        entry for `source` whose message names the limit (order step 7a).
     VersionMessage:
       type:
         - string
@@ -1152,13 +1276,14 @@ components:
       maxLength: 500
       description: |
         Optional change message for the new version. At most 500 code points; no control character (U+0000–U+001F,
-        U+007F–U+009F) and no lone surrogate; otherwise 400 `VALIDATION_FAILED` with an `errors` entry for `message`
-        (AC-1.7). A missing or `null` message means no message.
+        U+007F–U+009F, so no U+0000) and no lone surrogate; otherwise 400 `VALIDATION_FAILED` with an `errors` entry
+        for `message` (AC-1.7, AC-1.16). A missing or `null` message means no message. A JSON number (including a
+        fraction such as `1.5`) or boolean is 400 `MALFORMED_REQUEST` (AC-7.15).
 
-        Trimmed of Unicode-blank characters (Unicode whitespace including NBSP, zero-width space, BOM and NEL) before
-        storing; nothing left means no message. The 500 code-point limit counts the value as sent, before trimming;
-        the control-character rule applies to the trimmed value, so an inner line break is 400 and a trailing one is
-        removed (AC-3.14).
+        Trimmed of Unicode-blank characters (Unicode whitespace including NBSP, zero-width space and BOM; not NEL,
+        U+0085, which is a control character) before storing; nothing left means no message. The 500 code-point limit
+        counts the value as sent, before trimming; the control-character rule applies to the trimmed value, so an
+        inner line break is 400, a trailing line break is removed, and a NEL anywhere is 400 (AC-3.14, 1.0.3).
     CreateFeatureRequest:
       type: object
       required:
@@ -1839,9 +1964,10 @@ components:
           minItems: 1
           description: |
             Only on `GHERKIN_INVALID` (D8). One entry per error the Gherkin parser reports, sorted by `line`, then
-            `column` (AC-1.4, AC-1.5). A text without a Feature, including whitespace-only or comment-only text, has
-            exactly one entry: line 1, column 1, message `The text has no Feature` (AC-1.13). Never named `errors`,
-            which is for field errors.
+            `column` (AC-1.4, AC-1.5). Only when the parser reports no error, a text without a Feature (including
+            whitespace-only or comment-only text) has exactly one entry: line 1, column 1, message
+            `The text has no Feature` (AC-1.13). When the parser reports errors, only its errors are listed (AC-1.15).
+            Never named `errors`, which is for field errors.
           items:
             $ref: '#/components/schemas/ParseError'
         currentVersion:
@@ -1927,10 +2053,11 @@ components:
     BadRequest:
       description: |
         `VALIDATION_FAILED` (a body field or the `tag` parameter breaks a rule; the body has `errors`), or
-        `MALFORMED_REQUEST` (unreadable JSON; a number, boolean, array or object where a string is expected; a
-        `baseVersion` that is a JSON string, a fraction or above 2147483647; a path id that isn't a canonical UUID; a
-        `{version}` with leading zeros, a sign, 0 or above 2147483647; an `archived` value other than `true` or
-        `false`).
+        `MALFORMED_REQUEST` (unreadable JSON; a number, boolean, array or object where a string is expected, so a
+        JSON number or boolean for `path`, `source` or `message` (AC-7.15); a `baseVersion` that is a JSON string, a
+        fraction or above 2147483647; a path id that isn't a canonical UUID; a `{version}` with leading zeros, a sign,
+        0 or above 2147483647; an `archived` value other than `true` or `false`; a path id, `{version}` or `archived`
+        with leading or trailing whitespace, since they are matched exactly as received (AC-7.14)).
       content:
         application/problem+json:
           schema:
@@ -2007,9 +2134,11 @@ components:
     GherkinInvalid:
       description: |
         `GHERKIN_INVALID`: the text isn't valid Gherkin (D8). The body has `parseErrors`, sorted by line, then column
-        (AC-1.4, AC-1.5, AC-3.6). A text without a Feature, including whitespace-only or comment-only text, has
-        exactly one entry: line 1, column 1, message `The text has no Feature` (AC-1.13). Nothing is stored or
-        changed.
+        (AC-1.4, AC-1.5, AC-3.6). Only when the parser reports no error, a text without a Feature (including
+        whitespace-only or comment-only text) has exactly one entry: line 1, column 1, message
+        `The text has no Feature` (AC-1.13). When the parser reports errors, only its errors are listed, never the
+        "no Feature" entry (AC-1.15). A `# encoding:` pragma other than UTF-8 is exactly one entry: line 1, column 1,
+        `Only UTF-8 encoding is supported` (AC-1.19). Nothing is stored or changed.
       content:
         application/problem+json:
           schema:

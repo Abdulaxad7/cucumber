@@ -1,6 +1,6 @@
 # auth-service phase 4: persistence (PostgreSQL + Flyway)
 Status: Accepted (with follow-ups FU-17 to FU-24; final acceptance 2026-10-15 after fix round 1, see Acceptance)
-Last updated: 2026-10-15
+Last updated: 2026-10-18 (post-acceptance FR2 / E85: tests never load `.env`; guardrail G13)
 
 ## Problem and goal
 
@@ -1320,6 +1320,7 @@ Phase-2 guardrails carry over as adapted below. A task isn't done while any rule
   - only the labelled `# DEV ONLY` values in `application-dev.yaml` (E65) and the existing test-only JWT secret are committed;
   - no credentials in JDBC URLs;
   - nothing logs a password, at any level.
+- **G13. No test activates the `dev` profile or loads `.env` (added 2026-10-18, user decision; E85).** Since `7be734a`, `application-dev.yaml` imports the gitignored repository-root `.env`, which holds the developer's real secrets. No test may use `@ActiveProfiles("dev")`, `--spring.profiles.active=dev` or any other way of loading a `.env` file, and the build must pass with no `.env` present. Tests that check dev settings read `application-dev.yaml` as a resource (`YamlPropertySourceLoader`). Agents never read, print, copy or change `.env`.
 
 ### PL. Layering (phase 2's table applies unchanged; additions for persistence)
 
@@ -1895,6 +1896,7 @@ This single table replaces the phase-1 (`docs/specs/auth-service.md`) and phase-
 | FU-22 | P2 | `ddl-auto: validate` misses some drift; candidate start-up schema check | Open, accepted | pm |
 | FU-23 | P2 | Entity enum fields: `@Column(length = 32)` mirrors of V4 | Open, next time the entities change | backend-swe |
 | FU-24 | P2, docs | BUG-6: README "Settings" note that `AUTH_DB_*` values must not contain `${` (rule in C2) | Open | backend-swe (next README task) |
+| FU-25 | — | Two tests activated `dev` and so loaded the developer's real `.env` (since `7be734a`) | **Closed** 2026-10-18 (FR2, E85; 2023 tests green; qa reviews the `QaDevLoggingTest` edit at its next verification) | — |
 | RC-1 | P2 | Hibernate violation inspection in `AuthServiceImpl` | Candidate, not approved | backend-swe |
 | RC-2 | P2 | Spring Security exceptions thrown from services | Candidate, not approved | backend-swe |
 | RC-3 | P2 | Duplicated `UserResponse` / `OrganizationResponse` mapping | Candidate, not approved | backend-swe |
@@ -1909,8 +1911,67 @@ This single table replaces the phase-1 (`docs/specs/auth-service.md`) and phase-
 | RC-12 | P2 | `User.passwordHash` has a redundant `@Column(nullable = true)` | Candidate, not approved | backend-swe |
 | RC-13 | P2 | Phase-4 G4 leftovers: H2 mention at `ProjectGuardTest:30`; stale Javadoc at `support/UsesEmptyTestDatabase:16` | Candidate, not approved | backend-swe |
 
+### Post-acceptance fix round 2 (FR2): tests never load the developer's `.env` (approved by the user on 2026-10-18)
+
+**Problem.** The user's commit `7be734a` (2026-10-18) moved the dev secrets out of the repository. `application-dev.yaml` now has `spring.config.import: "optional:file:.env[.properties],optional:file:../.env[.properties]"`. Two test classes activate the `dev` profile, so when Gradle runs from `auth-service/`, their context imports `../.env`, which is the developer's real repository-root file with `JWT_SECRET` and `AUTH_DB_PASSWORD`. The main session confirmed this on 2026-10-18. The classes are:
+- `configuration/DevSqlLoggingTest:42`;
+- `qa/QaDevLoggingTest:51`.
+
+The tests still pass, because test properties take precedence, but the test JVM loads real secrets, and test behaviour depends on a file outside the build. pm rates it **S2** (a G12 credentials rule), and it's fixed before scenario-service T2.
+
+| ID | Change | Files | Why | Task |
+|---|---|---|---|---|
+| E85 | **Tests never load `.env`.** The two classes stop activating the `dev` profile. They still prove E78 (dev SQL goes through `org.hibernate.SQL` at the dev level, correlated, with `?` placeholders and no personal data or secrets) by applying **only the dev profile's `logging.level.org.hibernate.SQL` value, read from `application-dev.yaml` as a resource** (`YamlPropertySourceLoader`, as `LockTimeoutSettingTest` does). They set it before the flow and restore it afterwards (W3), and they use the shared test context's throwaway values (`TestJwt.SECRET`, the container's settings). **Recommended mechanism: remove `@ActiveProfiles("dev")`.** Overriding `spring.config.import` while keeping the profile is allowed only if backend-swe proves that the import is then never processed (evidence in the handoff); otherwise use the recommended mechanism. | the two classes (lines below); `support/` files only if needed | G12, G13 | FR2 |
+
+**FR2. E85** (backend-swe; before scenario-service T1c and T2).
+- **Test first:** add an assertion that **no property source of the test context comes from a `.env` file**. For example, no `environment.getPropertySources()` name contains `.env`, and no `spring.config.import` from `application-dev.yaml` was processed. Show it failing against the current code without opening `.env`: the property source's *name* is enough evidence, and its values are never printed.
+- **Change:**
+  - `configuration/DevSqlLoggingTest` (backend-swe's file):
+    - line 21 (the `ActiveProfiles` import) and line 42 (`@ActiveProfiles("dev")`) are removed;
+    - lines 32–40 (Javadoc: "with the dev profile's logging settings", "The dev profile is active ... so this class has its own context") are reworded to "with the dev profile's `org.hibernate.SQL` level, read from `application-dev.yaml`; no profile is activated (G13)";
+    - lines 70–74: the level is read from the YAML resource instead of the context's `Environment`;
+    - the field and import for `Environment` (19, 61–62) go only if they become unused.
+    - **Added:**
+      - the `.env` property-source assertion;
+      - one test method that loads `application-dev.yaml` and checks it sets `logging.level.org.hibernate.SQL: DEBUG`, has no `spring.datasource.password` and no `app.jwtSecret` key, and doesn't set `spring.jpa.show-sql` to true (the "no secrets in the dev file" check).
+  - **`qa/QaDevLoggingTest` (qa's file; one-time F1-style exception, approved by the user on 2026-10-18).** Only these lines may change:
+    - line 22 (the `ActiveProfiles` import), removed;
+    - line 51 (`@ActiveProfiles("dev")`), removed;
+    - Javadoc lines 38, 42–43 and 46–47 ("with the dev profile's logging settings", "the JWT secret this context signs with", "The context is the one of `configuration/DevSqlLoggingTest` (the dev profile on the shared test database)", "the level that this context's dev profile configures ... read from the context's environment"), reworded to the new mechanism with the same meaning;
+    - lines 79–80 (the level read from `environment`), changed to read the level from `application-dev.yaml` as a resource;
+    - at most 3 added lines for that (a helper call and its imports).
+
+    **Every assertion (lines 88–142) and line 95's use of the context's `app.jwtSecret` stay unchanged.** qa reviews this edit at re-verification. Any other qa change is a stop.
+- **Prove `.env` independence without touching the real file:**
+  1. Copy `auth-service/` to a scratch directory outside the repository whose parent holds no `.env`. Run the two classes there, then the full `./gradlew build`; both must be green.
+  2. In a second scratch copy, put a **throwaway** `.env` in the scratch parent that holds only a canary key (for example `ENV_CANARY_QA=1`), and show that the new assertion still passes (no `.env` source).
+  3. Remove the scratch directories afterwards. **Never read, print, copy, move or change the real `/Users/uDevs/IdeaProjects/cucumber/.env`.**
+- **Done when:**
+  - `./gradlew clean build` in `auth-service/` is green, with counts for backend-swe and qa. Only the new methods add tests; no test is removed;
+  - both classes keep `@Tag("AC-8.1")`;
+  - AC-8.1 is still proven: correlated `org.hibernate.SQL` entries, and no values or secrets;
+  - the handoff reports the distinct context count before and after (it may drop by one, because `DevSqlLoggingTest` no longer needs its own context), and the scratch-run results.
+- **Stop conditions:**
+  - a `@BeforeEach` level change doesn't reach `org.hibernate.SQL` without the profile;
+  - any other test needs a change;
+  - the fix needs `src/test/resources` or a build change.
+
+  Report; don't work around it.
+- **Allowed files:** `configuration/DevSqlLoggingTest.java` (the lines above, plus the added methods); `qa/QaDevLoggingTest.java` (exactly the lines above); `support/` files in `auth-service/src/test/java/com/example/authservice/support/`, only if a shared YAML-reading helper is needed (create one, or add one method to an existing class).
+- **Must not:** change `application-dev.yaml`, `application.yaml`, `.env.example`, any `.gitignore` or any main code; activate `dev` anywhere; open `.env`; use `@DirtiesContext`.
+
+**Then:** qa reviews the F1-style edit and re-runs `QaDevLoggingTest` and the full build. pm records the result here. No new AC: the fix keeps AC-8.1 and adds a guard (G13).
+
+**FR2 result: done (2026-10-18).**
+- The main session verified a clean build: 2023 tests, 0 failed.
+- No test uses `dev`, and the distinct test contexts went from 13 to 12.
+- The build passes with no `.env`, and with a canary `.env`, both in scratch copies. The real `.env` was not touched.
+- New test helper: `support/DevProfileFile`, which reads `application-dev.yaml` as a resource.
+- `QaDevLoggingTest` changed only on the permitted lines, plus one import (`support/DevProfileFile`); no assertion changed. qa reviews it at its next verification.
+- FU-25 is closed.
+
 ### Next
 
-- **scenario-service T2 onward is unblocked by its gate.** That gate was auth-service phase 4 passing its last review point (E), which is now passed, and phase 4 is accepted.
+- **scenario-service T2 onward is unblocked by its gate** (it also waited for FR2 above, which was done on 2026-10-18). That gate was auth-service phase 4 passing its last review point (E), which is now passed, and phase 4 is accepted.
 - **One alignment step comes first, under scenario-service's X2:** "If phase 4 changes a pattern item, pm updates this spec before T2". Phase 4 refined pattern items 4, 10, 12, 14 and 16 (see "As proven by the reference implementation" under the database pattern). One of them is substantive: scenario-service's `uk_features_project_id_path_lower` uses `lower(path)`, and under item 10 it needs `COLLATE "und-x-icu"`. The scenario-service pm makes that update before T2.
 - Phase 3 (`auth-service-accounts`) picks up FU-2 together with FU-17, FU-18 and FU-20.
