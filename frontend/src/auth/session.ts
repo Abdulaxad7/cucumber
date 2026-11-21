@@ -134,6 +134,35 @@ export function subscribe(listener: Listener): () => void {
     };
 }
 
+// D14 (user 2026-11-09): a pending invitation token, kept per tab while the user logs in or registers, so it
+// survives a reload during the detour. It is removed after the accept or when the invitation can't be used.
+export const PENDING_INVITE_KEY = 'cucumber.pendingInvite';
+
+export function rememberInvite(token: string): void {
+    try {
+        sessionStorage.setItem(PENDING_INVITE_KEY, token);
+    } catch {
+        // Storage unavailable: the invitation can still be accepted in this page.
+    }
+}
+
+/** Reads the pending invitation; it stays until forgetInvite (an accept can fail and be retried). */
+export function takeInvite(): string | null {
+    try {
+        return sessionStorage.getItem(PENDING_INVITE_KEY);
+    } catch {
+        return null;
+    }
+}
+
+export function forgetInvite(): void {
+    try {
+        sessionStorage.removeItem(PENDING_INVITE_KEY);
+    } catch {
+        // Nothing stored.
+    }
+}
+
 /** Test support: forget everything without notifying anyone. */
 export function clearSessionState(): void {
     cancelTimer();

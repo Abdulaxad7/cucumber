@@ -5,27 +5,49 @@ import {Tree, type UiTreeNode} from '../../ui/Tree';
 import {buildTree, folderIds, type FeatureSummary, type TreeNode} from './buildTree';
 import {treeStrings as t} from './strings';
 
+/** FE-QA-3 / F12: the feature's name is the primary text (the file name when the name is empty). */
+export function fileRowText(name: string, fileName: string): {label: string; secondary: string | undefined} {
+    const trimmed = name.trim();
+    return trimmed ? {label: trimmed, secondary: fileName} : {label: fileName, secondary: undefined};
+}
+
+function fileNode(feature: FeatureSummary, fileName: string, path: string): UiTreeNode {
+    const {label, secondary} = fileRowText(feature.name, fileName);
+    const [firstTag, ...moreTags] = feature.tags;
+    return {
+        id: feature.id,
+        kind: 'file',
+        label,
+        secondary,
+        title: path,
+        meta: (
+            <>
+                {firstTag ? (
+                    <span className="inline-flex min-w-0 items-center gap-1" title={feature.tags.join(' ')}>
+                        <span className="max-w-24 truncate rounded-sm bg-surface-hover px-1.5 py-0.5 font-mono text-xs text-text-muted">{firstTag}</span>
+                        {moreTags.length > 0 ? (
+                            <span className="text-xs text-text-muted">
+                                <span aria-hidden="true">+{moreTags.length}</span>
+                                <span className="sr-only">{t.moreTags(moreTags.join(' '))}</span>
+                            </span>
+                        ) : null}
+                    </span>
+                ) : null}
+                <span className="inline-flex w-8 shrink-0 items-center justify-end gap-1 text-xs tabular-nums text-text-muted">
+                    <ListChecks aria-hidden="true" size={12}/>
+                    <span className="sr-only">{t.testCases(feature.testCaseCount)}</span>
+                    <span aria-hidden="true">{feature.testCaseCount}</span>
+                </span>
+            </>
+        ),
+    };
+}
+
 function toUiNodes(nodes: TreeNode[]): UiTreeNode[] {
     return nodes.map((node) =>
         node.kind === 'folder'
             ? {id: node.id, kind: 'folder', label: node.name, children: toUiNodes(node.children)}
-            : {
-                id: node.id,
-                kind: 'file',
-                label: node.name,
-                meta: (
-                    <>
-                        {node.feature.tags.length > 0 ? (
-                            <span className="hidden truncate font-mono text-xs text-text-muted sm:inline">{node.feature.tags.join(' ')}</span>
-                        ) : null}
-                        <span className="inline-flex items-center gap-1 text-xs tabular-nums text-text-muted">
-                            <ListChecks aria-hidden="true" size={12}/>
-                            <span className="sr-only">{t.testCases(node.feature.testCaseCount)}</span>
-                            <span aria-hidden="true">{node.feature.testCaseCount}</span>
-                        </span>
-                    </>
-                ),
-            },
+            : fileNode(node.feature, node.name, node.path),
     );
 }
 

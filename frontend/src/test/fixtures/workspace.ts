@@ -9,6 +9,7 @@ export const userIds = {
     gus: '9c1e3a5b-7d2f-4b6a-8e0c-2a4c6e8a0b57',
     hal: '4e6a8c0e-2b4d-4f6a-8c0e-2b4d6f8a0c1e',
     dan: '7b9d1f3a-5c7e-4a9b-8d1f-3a5c7e9b1d3f',
+    ben: '5a7c9e1a-3b5d-4f7a-9c1e-3a5b7d9f1a3c',
 } as const;
 
 export const billingId = '5d7e9f1a-2b3c-4d5e-8f60-718293a4b5c6';
@@ -18,6 +19,7 @@ export const users = {
     gus: {id: userIds.gus, email: 'gus@example.com', fullName: 'Gus Underwood', orgRole: 'MEMBER', projectRole: 'MEMBER'},
     hal: {id: userIds.hal, email: 'hal@example.com', fullName: 'Hal Jordan', orgRole: 'MEMBER', projectRole: 'TESTER'},
     dan: {id: userIds.dan, email: 'dan@example.com', fullName: 'Dan Brook', orgRole: 'READER', projectRole: 'READER'},
+    ben: {id: userIds.ben, email: 'ben@example.com', fullName: 'Ben Okafor', orgRole: 'ADMIN', projectRole: 'ADMIN'},
 } as const satisfies Record<string, {id: string; email: string; fullName: string; orgRole: S['OrganizationRole']; projectRole: S['ProjectRole']}>;
 
 export type UserKey = keyof typeof users;

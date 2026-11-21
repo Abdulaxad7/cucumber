@@ -2,7 +2,9 @@
 // It answers only the operations the contracts define, with contract-typed bodies.
 import type {components as Scenario} from '../../api/generated/scenario-service';
 import {ids} from './auth';
-import {acmeMembers, billingId, orgFor, projectsFor, type UserKey} from './workspace';
+import {FakeAuth} from './fakeAuth';
+import {FakeReport} from './fakeReport';
+import {billingId, users, type UserKey} from './workspace';
 import {
     address,
     addressDetail,
@@ -49,7 +51,7 @@ function summaryOf(f: S['Feature']): S['FeatureSummary'] {
 }
 
 export class FakeBackend {
-    readonly user: UserKey;
+    readonly user: UserKey | null;
     readonly features = new Map<string, S['Feature']>();
     readonly requests: FakeRequest[] = [];
     tags: S['Tag'][] = defaultTags;
@@ -57,8 +59,15 @@ export class FakeBackend {
     /** Extra summaries listed without details (for large trees). */
     extraSummaries: S['FeatureSummary'][] = [];
 
-    constructor(user: UserKey, features: S['Feature'][] = [paymentDetail, addressDetail, legacyDetail]) {
+    /** Organizations, members, invitations, projects and project members (batch C). */
+    readonly auth: FakeAuth;
+    /** Runs, results and upload tokens (batch D). */
+    readonly report: FakeReport;
+
+    constructor(user: UserKey | null, features: S['Feature'][] = [paymentDetail, addressDetail, legacyDetail]) {
         this.user = user;
+        this.auth = new FakeAuth(user);
+        this.report = new FakeReport(this.auth, user ? users[user].id : null);
         for (const f of features) this.features.set(f.id, f);
     }
 
@@ -69,9 +78,12 @@ export class FakeBackend {
     answer(method: string, url: URL, body: unknown): FakeAnswer | null {
         const path = url.pathname;
         this.requests.push({method, path, search: url.search, body});
-        if (method === 'GET' && path === '/api/orgs') return json(200, [orgFor(this.user)]);
-        if (method === 'GET' && path === `/api/orgs/${ids.acme}/projects`) return json(200, projectsFor(this.user));
-        if (method === 'GET' && path === `/api/orgs/${ids.acme}/members`) return json(200, acmeMembers);
+        if (path.startsWith('/api/orgs') || path.startsWith('/api/auth/invitations/')) return this.auth.answer(method, url, body);
+        if (/^\/api\/projects\/[^/]+\/(runs|upload-tokens)(\/|$)/.test(path)) return this.report.answer(method, url, body);
+
+        // Batch C: version history and test cases (additive).
+        const sub = /^\/api\/projects\/([^/]+)\/features\/([^/]+)\/(versions|test-cases)(?:\/([^/]+))?$/.exec(path);
+        if (sub && method === 'GET') return this.featureSub(path, sub[2] ?? '', sub[3] ?? '', sub[4]);
 
         const match = /^\/api\/projects\/([^/]+)\/(features|tags)(?:\/([^/]+))?(?:\/(archive|restore))?$/.exec(path);
         if (!match) return null;
@@ -106,6 +118,29 @@ export class FakeBackend {
             return json(200, restored);
         }
         return null;
+    }
+
+    private featureSub(path: string, featureId: string, area: string, version: string | undefined): FakeAnswer {
+        const current = this.features.get(featureId);
+        if (!current) return problem(404, scenarioProblem(404, 'FEATURE_NOT_FOUND', path));
+        const count = current.currentVersion;
+        if (area === 'test-cases') {
+            const cases: S['TestCase'][] = [
+                {id: 'a0000000-0000-4000-8000-000000000001', type: 'SCENARIO', scenarioId: 'b0000000-0000-4000-8000-000000000001', exampleRowId: null, name: 'Pay by card', tags: current.tags, line: 4, steps: []},
+                {id: 'a0000000-0000-4000-8000-000000000002', type: 'EXAMPLE_ROW', scenarioId: 'b0000000-0000-4000-8000-000000000002', exampleRowId: 'c0000000-0000-4000-8000-000000000001', name: 'Pay with <method>', tags: [...current.tags, '@smoke'], line: 15, steps: []},
+            ];
+            return json(200, cases);
+        }
+        const summaries: S['FeatureVersionSummary'][] = Array.from({length: count}, (_, i) => ({
+            version: count - i,
+            message: count - i === 1 ? null : `Change ${count - i}`,
+            createdBy: current.updatedBy,
+            createdAt: `2026-10-${String(5 + (count - i)).padStart(2, '0')}T09:00:00Z`,
+        }));
+        if (version === undefined) return json(200, summaries);
+        const found = summaries.find((v) => String(v.version) === version);
+        if (!found) return problem(404, scenarioProblem(404, 'VERSION_NOT_FOUND', path));
+        return json(200, {...found, source: current.source});
     }
 
     private create(path: string, body: unknown): FakeAnswer {

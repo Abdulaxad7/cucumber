@@ -179,3 +179,20 @@ describe('splitFieldErrors (D7)', () => {
         });
     });
 });
+
+// AC-8.3 (user 2026-11-21): report-service's FEATURE_NOT_PLANNABLE names the features in `featureIds`.
+describe('parseProblem featureIds', () => {
+    it('reads canonical UUIDs and drops anything else', () => {
+        const p = parseProblem(
+            problem(422, 'FEATURE_NOT_PLANNABLE', {
+                featureIds: ['2d7f3a91-5b0c-4e6d-8a1f-9c3b5e7d1f20', 'not-a-uuid', 7, '2D7F3A91-5B0C-4E6D-8A1F-9C3B5E7D1F20'],
+            }),
+        );
+        expect(p?.featureIds).toEqual(['2d7f3a91-5b0c-4e6d-8a1f-9c3b5e7d1f20']);
+    });
+
+    it('is empty when absent or not a list', () => {
+        expect(parseProblem(problem(422, 'RUN_EMPTY'))?.featureIds).toEqual([]);
+        expect(parseProblem(problem(422, 'FEATURE_NOT_PLANNABLE', {featureIds: 'x'}))?.featureIds).toEqual([]);
+    });
+});

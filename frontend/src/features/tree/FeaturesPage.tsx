@@ -127,17 +127,9 @@ export function FeaturesPage({projectId, search}: { projectId: string; search: F
                             <Tab id="active">{t.active}</Tab>
                             <Tab id="archived">{t.archived}</Tab>
                         </TabList>
-                        {search.tag ? (
-                            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-1.5 text-xs text-text-muted">
-                                <span>{t.tagFilter(search.tag)}</span>
-                                <Button variant="ghost" size="sm" onPress={() => setSearch({tag: undefined})}>
-                                    {t.clearFilter}
-                                </Button>
-                            </div>
-                        ) : null}
-                        {tags.data && tags.data.length > 0 ? (
-                            <div role="group" aria-label={t.tagsLabel} className="flex flex-wrap gap-1.5 border-b border-border px-4 py-2">
-                                {tags.data.map((tag) => (
+                        {(tags.data && tags.data.length > 0) || search.tag ? (
+                            <div role="group" aria-label={t.tagsLabel} className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2">
+                                {(tags.data ?? []).map((tag) => (
                                     <ToggleChip
                                         key={tag.name}
                                         isSelected={search.tag === tag.name}
@@ -146,6 +138,16 @@ export function FeaturesPage({projectId, search}: { projectId: string; search: F
                                         {tag.name}
                                     </ToggleChip>
                                 ))}
+                                {search.tag ? (
+                                    <>
+                                        <span className="sr-only">{t.tagFilter(search.tag)}</span>
+                                        <span className="ml-auto">
+                                            <Button variant="ghost" size="sm" onPress={() => setSearch({tag: undefined})}>
+                                                {t.clearFilter}
+                                            </Button>
+                                        </span>
+                                    </>
+                                ) : null}
                             </div>
                         ) : null}
                         <TabPanel id="active">{archived ? null : treeArea()}</TabPanel>

@@ -12,12 +12,16 @@ type Workspace = ReturnType<typeof useWorkspace>;
 
 interface NavItem {
     label: string;
+    /** A fuller name where the short label repeats across sections (collapsed tooltips and names). */
+    fullLabel?: string;
     href: string;
     icon: LucideIcon;
 }
 
 interface NavSection {
     title: string | null;
+    /** "Organization" or "Project", shown above the title so repeated items (Members) are told apart. */
+    kind: string | null;
     items: NavItem[];
 }
 
@@ -25,14 +29,15 @@ interface NavSection {
 export function navSections(ws: Workspace): NavSection[] {
     const sections: NavSection[] = [];
     if (!ws.orgId) {
-        sections.push({ title: null, items: [{ label: appStrings.nav.organizations, href: '/orgs', icon: Building }] });
+        sections.push({ title: null, kind: null, items: [{ label: appStrings.nav.organizations, href: '/orgs', icon: Building }] });
         return sections;
     }
     sections.push({
         title: ws.org?.name ?? null,
+        kind: appStrings.nav.orgSection,
         items: [
             { label: appStrings.nav.projects, href: `/orgs/${ws.orgId}/projects`, icon: FolderKanban },
-            { label: appStrings.nav.members, href: `/orgs/${ws.orgId}/members`, icon: Users },
+            { label: appStrings.nav.members, fullLabel: appStrings.nav.orgMembers, href: `/orgs/${ws.orgId}/members`, icon: Users },
         ],
     });
     if (ws.project) {
@@ -42,8 +47,8 @@ export function navSections(ws: Workspace): NavSection[] {
             { label: appStrings.nav.runs, href: `${base}/runs`, icon: CirclePlay },
         ];
         if (hasProjectRole(ws.project.myRole, 'ADMIN')) items.push({ label: appStrings.nav.uploadTokens, href: `${base}/upload-tokens`, icon: KeyRound });
-        items.push({ label: appStrings.nav.members, href: `${base}/members`, icon: Users }, { label: appStrings.nav.settings, href: `${base}/settings`, icon: Settings });
-        sections.push({ title: ws.project.name, items });
+        items.push({ label: appStrings.nav.members, fullLabel: appStrings.nav.projectMembers, href: `${base}/members`, icon: Users }, { label: appStrings.nav.settings, href: `${base}/settings`, icon: Settings });
+        sections.push({ title: ws.project.name, kind: appStrings.nav.projectSection, items });
     }
     return sections;
 }
@@ -68,8 +73,17 @@ export function Sidebar({ workspace, collapsed, onToggle, onNavigate }: SidebarP
             <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-2 py-4">
                 {sections.map((section, index) => (
                     <div key={section.title ?? `section-${index}`} className="flex flex-col gap-1">
-                        {section.title && !collapsed ? <p className="truncate px-2 pb-1 text-xs font-medium text-text-muted">{section.title}</p> : null}
-                        <ul className="flex flex-col gap-0.5">
+                        {section.title && !collapsed ? (
+                            <p id={`nav-section-${index}`} className="flex min-w-0 flex-col px-2 pb-1">
+                                {section.kind ? <span className="text-xs text-text-muted">{section.kind}</span> : null}
+                                <span className="truncate text-sm font-semibold text-text">{section.title}</span>
+                            </p>
+                        ) : null}
+                        {collapsed && index > 0 ? <span aria-hidden="true" className="mx-2 mb-1 h-px bg-border"/> : null}
+                        <ul
+                            className="flex flex-col gap-0.5"
+                            aria-labelledby={section.title && !collapsed ? `nav-section-${index}` : undefined}
+                        >
                             {section.items.map((item) => {
                                 const active = pathname === item.href;
                                 const Icon = item.icon;
@@ -77,7 +91,7 @@ export function Sidebar({ workspace, collapsed, onToggle, onNavigate }: SidebarP
                                     <Link
                                         href={item.href}
                                         aria-current={active ? 'page' : undefined}
-                                        aria-label={collapsed ? item.label : undefined}
+                                        aria-label={collapsed ? (item.fullLabel ?? item.label) : undefined}
                                         onPress={onNavigate}
                                         className={cx(
                                             'relative flex h-8 items-center gap-3 rounded-md px-2 text-sm font-medium outline-none transition duration-120 ease-standard',
@@ -92,7 +106,7 @@ export function Sidebar({ workspace, collapsed, onToggle, onNavigate }: SidebarP
                                 );
                                 return (
                                     <li key={item.href}>
-                                        <Tooltip label={item.label} isDisabled={!collapsed}>
+                                        <Tooltip label={item.fullLabel ?? item.label} isDisabled={!collapsed}>
                                             {link}
                                         </Tooltip>
                                     </li>

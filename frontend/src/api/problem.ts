@@ -95,10 +95,13 @@ export interface Problem extends Pick<Gateway['schemas']['Problem'], 'status' | 
     errors: FieldProblem[];
     parseErrors: ParseError[];
     currentVersion: number | null;
+    /** report-service FEATURE_NOT_PLANNABLE: the features that can't be planned (canonical UUIDs only). */
+    featureIds: string[];
     requestId: string | null;
 }
 
 const REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -132,7 +135,7 @@ function readList<T>(value: unknown, read: (item: unknown) => T | null): T[] {
 /** Reads an RFC 9457 body. Returns null for anything that isn't a Problem. */
 export function parseProblem(body: unknown): Problem | null {
     if (!isRecord(body)) return null;
-    const {status, title, detail, instance, code, errors, parseErrors, currentVersion, requestId} = body;
+    const {status, title, detail, instance, code, errors, parseErrors, currentVersion, featureIds, requestId} = body;
     if (typeof status !== 'number' || !Number.isInteger(status) || typeof title !== 'string' || typeof detail !== 'string') {
         return null;
     }
@@ -145,6 +148,7 @@ export function parseProblem(body: unknown): Problem | null {
         errors: readList(errors, readFieldProblem),
         parseErrors: readList(parseErrors, readParseError),
         currentVersion: typeof currentVersion === 'number' && Number.isInteger(currentVersion) ? currentVersion : null,
+        featureIds: readList(featureIds, (item) => (typeof item === 'string' && CANONICAL_UUID.test(item) ? item : null)),
         requestId: typeof requestId === 'string' && REQUEST_ID.test(requestId) ? requestId : null,
     };
 }

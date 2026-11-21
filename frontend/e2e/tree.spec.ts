@@ -52,7 +52,37 @@ test('AC-5.1 the tree is built from paths', async ({page}) => {
     expect(texts[2]).toContain('1 test case');
     expect(texts[3]).toContain('payment.feature');
     expect(texts[3]).toContain('@checkout');
+    // FE-QA-3: each file row shows the feature's name as its primary text.
+    await expect(tree(page).getByRole('row', {name: /address\.feature/}).getByText('Address', {exact: true})).toBeVisible();
+    await expect(tree(page).getByRole('row', {name: /payment\.feature/}).getByText('Payment', {exact: true})).toBeVisible();
     await expect(tree(page)).not.toContainText('legacy.feature');
+});
+
+// @US-5 @AC-5.1 at 390 px (FE-QA-3): name, tags and count stay visible on a phone.
+test('AC-5.1 rows keep name, tags and count visible at 390 px', async ({page}) => {
+    await page.setViewportSize({width: 390, height: 844});
+    await setup(page);
+    await page.goto(featuresUrl);
+    const row = tree(page).getByRole('row', {name: /payment\.feature/});
+    await expect(row.getByText('Payment', {exact: true})).toBeVisible();
+    await expect(row.getByText('@checkout')).toBeVisible();
+    await expect(row.getByText('1', {exact: true})).toBeVisible();
+    const rowBox = await row.boundingBox();
+    const tagBox = await row.getByText('@checkout').boundingBox();
+    expect(rowBox && tagBox && tagBox.x + tagBox.width <= rowBox.x + rowBox.width + 0.5).toBe(true);
+});
+
+// F12: a feature with an empty name shows its file name as the primary text.
+test('AC-5.1 a feature without a name shows its file name', async ({page}) => {
+    const backend = new FakeBackend('gus');
+    const original = backend.features.get(address.id);
+    if (!original) throw new Error('fixture');
+    backend.features.set(address.id, {...original, name: ''});
+    await setup(page, 'gus', backend);
+    await page.goto(featuresUrl);
+    const row = tree(page).getByRole('row', {name: /address\.feature/});
+    await expect(row.getByText('address.feature', {exact: true})).toBeVisible();
+    await expect(row.getByText('Address', {exact: true})).toHaveCount(0);
 });
 
 // @US-5 @AC-5.2
@@ -183,4 +213,20 @@ test('AC-9.2 the tree empty state offers no action to a reader', async ({page}) 
     await page.goto(featuresUrl);
     await expect(page.getByText('No features yet')).toBeVisible();
     await expect(page.getByRole('button', {name: 'New feature'})).toHaveCount(0);
+});
+
+// FE-QA-5: a route that throws after an in-app navigation shows the error page with focus on its h1.
+test('FE-QA-5 the error page h1 takes focus after an in-app navigation', async ({page}) => {
+    await setup(page);
+    await page.route(/\/api\/projects\/[^/]+\/features$/, async (route) => {
+        await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify([{...address, tags: null}])});
+    });
+    await page.goto(`/projects/${ids.checkout}/runs`);
+    await expect(page.getByRole('heading', {level: 1, name: 'Runs'})).toBeVisible();
+    await page.getByRole('navigation', {name: 'Sidebar'}).getByRole('link', {name: 'Features'}).click();
+    const h1 = page.getByRole('heading', {level: 1, name: 'Something went wrong'});
+    await expect(h1).toBeVisible();
+    await expect(h1).toBeFocused();
+    await page.waitForTimeout(1000);
+    await expect(h1).toBeFocused();
 });

@@ -8,6 +8,10 @@ import {
     startSession,
     subscribe,
     takeEndReason,
+    PENDING_INVITE_KEY,
+    forgetInvite,
+    rememberInvite,
+    takeInvite,
 } from './session';
 import {makeJwt, nowSeconds, tokenFor} from '../test/jwt';
 
@@ -97,5 +101,35 @@ describe('AC-1.6 expiry and logout', () => {
         endSession('unauthorized');
         endSession('unauthorized');
         expect(listener).toHaveBeenCalledTimes(1);
+    });
+});
+
+// D14 (user 2026-11-09): the pending invitation survives a reload during the login detour, and is gone after use.
+describe('pending invitation (D14)', () => {
+    it('stores the token in sessionStorage under cucumber.pendingInvite, never in localStorage', () => {
+        rememberInvite('tok-456');
+        expect(PENDING_INVITE_KEY).toBe('cucumber.pendingInvite');
+        expect(sessionStorage.getItem(PENDING_INVITE_KEY)).toBe('tok-456');
+        expect(localStorage.length).toBe(0);
+    });
+
+    it('survives a reload: a fresh read finds it, takeInvite reads it without removing it', () => {
+        sessionStorage.setItem(PENDING_INVITE_KEY, 'tok-789');
+        expect(takeInvite()).toBe('tok-789');
+        expect(takeInvite()).toBe('tok-789');
+    });
+
+    it('forgetInvite removes it', () => {
+        rememberInvite('tok-1');
+        forgetInvite();
+        expect(sessionStorage.getItem(PENDING_INVITE_KEY)).toBeNull();
+        expect(takeInvite()).toBeNull();
+    });
+
+    it('ending the session does not drop a pending invitation (the login detour needs it)', () => {
+        rememberInvite('tok-2');
+        startSession(tokenFor('u1', 'a@example.com', 60));
+        endSession('logout');
+        expect(takeInvite()).toBe('tok-2');
     });
 });

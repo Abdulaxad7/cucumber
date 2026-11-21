@@ -90,7 +90,11 @@ test('AC-6.2 Gherkin errors show where they are; F8 moves between them', async (
     await expect(marked).toHaveText('W');
     await expect(line(page, 4)).toContainText('Whenn I pay');
     await expect(line(page, 4).locator('.cm-lintRange-error')).toHaveCount(1);
-    await expect(page.locator('.cm-panel-lint')).toContainText("(4:3): expected: #EOF, #TableRow, ... got 'Whenn I pay'");
+    const panel = page.getByRole('region', {name: 'Gherkin problems'});
+    await expect(panel).toContainText('1 problem');
+    await expect(panel).toContainText('Line 4, column 3');
+    await expect(panel).toContainText("expected: #EOF, #TableRow, ... got 'Whenn I pay'");
+    await expect(panel).toContainText('Whenn I pay');
     await expect(page.getByRole('status').filter({hasText: '1 Gherkin error; first on line 4'})).toBeAttached();
     await expect(line(page, 4)).toHaveText('  Whenn I pay');
     await expect(page.getByText('Unsaved changes')).toBeVisible();
@@ -99,6 +103,11 @@ test('AC-6.2 Gherkin errors show where they are; F8 moves between them', async (
     await replaceDoc(page, 'Feature: Pay\n  Whenn a\n  Scenario: Card\n  Whenn b\n  Then c\n  Whenn d\n');
     await page.keyboard.press('ControlOrMeta+s');
     await expect(page.getByRole('status').filter({hasText: '3 Gherkin errors; first on line 2'})).toBeAttached();
+    await expect(page.getByRole('region', {name: 'Gherkin problems'})).toContainText('3 problems');
+    // A row moves the cursor to its error.
+    await page.getByRole('button', {name: /Line 6, column 3/}).click();
+    await expect(editor(page)).toBeFocused();
+    await expect(page.locator('.cm-activeLine')).toContainText('Whenn d');
     await expect(page.locator('.cm-lintRange-error')).toHaveCount(3);
     await editor(page).click();
     await page.keyboard.press('ControlOrMeta+Home');
@@ -220,6 +229,8 @@ test('AC-9.4 keyboard-only journey: log in, open Checkout, edit, see a 422 marke
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(`/projects/${ids.checkout}/features`);
+    // The features page loads lazily; a keyboard user waits for it before moving on.
+    await expect(page.getByRole('treegrid', {name: 'Features'})).toBeVisible();
 
     await tabTo(async () => (await page.evaluate(() => document.activeElement?.getAttribute('role'))) === 'row', 'tree');
     await expectFocusVisibleNotBody();
@@ -242,10 +253,9 @@ test('AC-9.4 keyboard-only journey: log in, open Checkout, edit, see a 422 marke
     await expect(page.locator('.cm-lintRange-error')).toHaveCount(1);
     await expect(page.getByRole('status').filter({hasText: '1 Gherkin error; first on line 6'})).toBeAttached();
 
-    // The lint panel took focus with the errors; Escape returns to the editor at the same place.
-    await expect(page.locator('.cm-panel-lint [role=listbox]')).toBeFocused();
-    await page.keyboard.press('Escape');
+    // Focus stays in the editor; the problems panel lists the error.
     await expect(editor(page)).toBeFocused();
+    await expect(page.getByRole('region', {name: 'Gherkin problems'})).toContainText('Line 6, column 5');
     await page.keyboard.press('Backspace');
     await page.keyboard.press('End');
     await page.keyboard.type(' again');

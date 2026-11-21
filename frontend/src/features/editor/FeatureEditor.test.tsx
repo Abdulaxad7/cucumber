@@ -51,8 +51,11 @@ function open(user: UserKey, featureId: string = payment.id, saveAnswer?: (body:
     return {app, world};
 }
 
+// The first editor in a run loads CodeMirror; allow for a cold start under a loaded test machine.
+const SLOW = {timeout: 3000};
+
 async function editorReady(version = 2) {
-    await screen.findByText(`Version ${version}`);
+    await screen.findByText(`Version ${version}`, {}, SLOW);
 }
 
 function puts(world: ReturnType<typeof open>['world']) {
@@ -66,8 +69,8 @@ describe('AC-6.1 edit and save', () => {
         await editorReady();
         fireEvent.change(await screen.findByLabelText('Change message (optional)'), {target: {value: 'Clarify card step'}});
         fireEvent.click(await screen.findByRole('button', {name: 'Save'}));
-        await screen.findByText('Version 3');
-        expect(await screen.findByText('Saved')).toBeTruthy();
+        await screen.findByText('Version 3', {}, SLOW);
+        expect(await screen.findByText('Saved', {}, SLOW)).toBeTruthy();
         expect(puts(world)[0]?.body).toEqual({
             path: payment.path,
             source: paymentSourceV2,
@@ -90,7 +93,11 @@ describe('AC-6.2 Gherkin errors show where they are', () => {
         await editorReady();
         fireEvent.click(await screen.findByRole('button', {name: 'Save'}));
         expect(await screen.findByText('1 Gherkin error; first on line 4')).toBeTruthy();
-        await waitFor(() => expect(document.querySelector('.cm-panel-lint')?.textContent).toContain(message));
+        // The problems panel (user 2026-11-09): the location as a chip, the parser's message without its prefix.
+        const panel = await screen.findByRole('region', {name: 'Gherkin problems'});
+        expect(panel.textContent).toContain('1 problem');
+        expect(panel.textContent).toContain('Line 4, column 3');
+        expect(panel.textContent).toContain("expected: #EOF, #TableRow, ... got 'Whenn I pay'");
         const marked = document.querySelector('.cm-lintRange-error');
         expect(marked?.textContent).toBe('S');
         expect(marked?.closest('.cm-line')?.textContent).toBe('  Scenario: Pay by card');

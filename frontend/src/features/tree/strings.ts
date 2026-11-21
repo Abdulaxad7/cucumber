@@ -16,6 +16,7 @@ export const treeStrings = {
     noArchived: 'No archived features',
     selectFeature: 'Select a feature',
     selectFeatureHelp: 'Choose a feature in the tree to view or edit it.',
+    moreTags: (tags: string) => `, also ${tags}`,
     testCases: (n: number) => (n === 1 ? '1 test case' : `${n} test cases`),
     createTitle: 'New feature',
     pathLabel: 'Path',

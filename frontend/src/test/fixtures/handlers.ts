@@ -4,6 +4,8 @@ import type {components} from '../../api/generated/scenario-service';
 import {ids} from './auth';
 import {acmeMembers, orgFor, projectsFor, type UserKey} from './workspace';
 import {tags as defaultTags} from './scenario';
+import type {FakeAuth} from './fakeAuth';
+import type {FakeBackend} from './fakeBackend';
 
 type S = components['schemas'];
 
@@ -52,3 +54,46 @@ export function scenarioReadHandlers(world: FeatureWorld) {
         http.get('/api/projects/:projectId/tags', () => HttpResponse.json(world.tags ?? [])),
     ];
 }
+
+/** Batch C: every /api/orgs and invitation call answered by an in-memory auth-service (FakeAuth). */
+export function fakeAuthHandlers(auth: FakeAuth) {
+    return [
+        http.all('/api/orgs*', async ({request}) => answerWith(auth, request)),
+        http.all('/api/orgs/*', async ({request}) => answerWith(auth, request)),
+        http.post('/api/auth/invitations/:token/accept', async ({request}) => answerWith(auth, request)),
+    ];
+}
+
+async function answerWith(auth: FakeAuth, request: Request) {
+    const text = await request.text();
+    let body: unknown = null;
+    try {
+        body = text ? JSON.parse(text) : null;
+    } catch {
+        body = text;
+    }
+    const answer = auth.answer(request.method, new URL(request.url), body);
+    if (!answer) return HttpResponse.json({type: 'about:blank', title: 'Not Found', status: 404, detail: 'x', instance: '/'}, {status: 404});
+    if (answer.status === 204) return new HttpResponse(null, {status: 204});
+    return new HttpResponse(JSON.stringify(answer.body), {status: answer.status, headers: {'Content-Type': answer.contentType}});
+}
+
+/** Batch D: a whole backend (auth, scenario and report) behind MSW, for component tests. */
+export function fakeBackendHandlers(backend: FakeBackend) {
+    return [
+        http.all('/api/*', async ({request}) => {
+            const text = await request.text();
+            let body: unknown = null;
+            try {
+                body = text ? JSON.parse(text) : null;
+            } catch {
+                body = text;
+            }
+            const answer = backend.answer(request.method, new URL(request.url), body);
+            if (!answer) return HttpResponse.json({type: 'about:blank', title: 'Not Found', status: 404, detail: 'x', instance: '/'}, {status: 404});
+            if (answer.status === 204) return new HttpResponse(null, {status: 204});
+            return new HttpResponse(JSON.stringify(answer.body), {status: answer.status, headers: {'Content-Type': answer.contentType}});
+        }),
+    ];
+}
+

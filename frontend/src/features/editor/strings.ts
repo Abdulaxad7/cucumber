@@ -37,4 +37,8 @@ export const editorStrings = {
     notFound: "This feature doesn't exist",
     backToTree: 'Back to the feature tree',
     loading: 'Loading feature…',
+    problemsLabel: 'Gherkin problems',
+    problems: (n: number) => (n === 1 ? '1 problem' : `${n} problems`),
+    problemsHint: 'F8 jumps to the next problem',
+    location: (line: number, column: number) => `Line ${line}, column ${column}`,
 } as const;

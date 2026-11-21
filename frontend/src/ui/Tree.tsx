@@ -19,6 +19,10 @@ export interface UiTreeNode {
     kind: 'folder' | 'file';
     /** The row's text and its type-ahead value. */
     label: string;
+    /** The full text for a truncated label (for example the file's path). */
+    title?: string;
+    /** Secondary text after the label (for example the file name), truncated first. */
+    secondary?: string;
     /** Extra content on the right of a file row (tags, counts). */
     meta?: ReactNode;
     children?: UiTreeNode[];
@@ -41,12 +45,13 @@ function renderNode(node: UiTreeNode) {
         <TreeItem
             key={node.id}
             id={node.id}
-            textValue={node.label}
-            className="group flex h-7 cursor-default items-center rounded-md px-2 text-sm text-text outline-none data-hovered:bg-surface-hover data-selected:bg-surface-hover data-selected:font-medium data-focus-visible:outline-2 data-focus-visible:-outline-offset-2 data-focus-visible:outline-focus-ring"
+            textValue={node.secondary ? `${node.label} (${node.secondary})` : node.label}
+            className="group flex h-7 cursor-default items-center px-2 text-sm text-text outline-none"
         >
             <TreeItemContent>
                 {({isExpanded, hasChildItems, level, isSelected}) => (
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <div
+                        className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md pl-2 pr-2 transition duration-120 ease-standard group-data-hovered:bg-surface-hover group-data-selected:bg-surface-hover group-data-selected:font-medium group-data-focus-visible:outline-2 group-data-focus-visible:-outline-offset-2 group-data-focus-visible:outline-focus-ring">
                         <Indent level={level}/>
                         {hasChildItems ? (
                             <AriaButton
@@ -68,8 +73,11 @@ function renderNode(node: UiTreeNode) {
                         ) : (
                             <FileText aria-hidden="true" size={16} className={cx('shrink-0', isSelected ? 'text-primary' : 'text-text-muted')}/>
                         )}
-                        <span className="truncate">{node.label}</span>
-                        {node.meta ? <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">{node.meta}</span> : null}
+                        <span className="flex min-w-0 flex-1 items-baseline gap-2" title={node.title}>
+                            <span className="min-w-0 truncate">{node.label}</span>
+                            {node.secondary ? <span className="w-0 min-w-0 flex-1 truncate font-mono text-xs text-text-muted">{node.secondary}</span> : null}
+                        </span>
+                        {node.meta ? <span className="flex shrink-0 items-center gap-2 pl-2">{node.meta}</span> : null}
                     </div>
                 )}
             </TreeItemContent>
@@ -109,7 +117,7 @@ export function Tree({label, nodes, expandedKeys, onExpandedChange, selectedKey,
                 onSelectionChange={onSelectionChange}
                 disabledKeys={folderIds}
                 disabledBehavior="selection"
-                className="h-full min-h-0 overflow-auto px-2 py-1 outline-none"
+                className="h-full min-h-0 overflow-auto py-1 outline-none"
             >
                 {renderNode}
             </AriaTree>

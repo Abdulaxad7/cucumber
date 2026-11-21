@@ -94,9 +94,14 @@ const gusWorld = {
     'GET /api/orgs': (route: Route) => json(route, 200, [acmeForGus]),
     [`GET /api/orgs/${ids.acme}/projects`]: (route: Route) => json(route, 200, [checkout, billing]),
     [`GET /api/orgs/${ids.acme}/members`]: (route: Route) => json(route, 200, members),
+    // Fixture only (user 2026-11-09): the features page lists features and tags.
+    [`GET /api/projects/${ids.checkout}/features`]: (route: Route) => json(route, 200, []),
+    [`GET /api/projects/${ids.checkout}/tags`]: (route: Route) => json(route, 200, []),
 };
 
 async function expectNoAxeViolations(page: Page) {
+    // FE-QA-1: scan the settled UI, after overlay entry animations (opacity) have finished.
+    await expect(page.locator('[data-entering]')).toHaveCount(0);
     const results = await new AxeBuilder({page}).withTags(WCAG).analyze();
     expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 }

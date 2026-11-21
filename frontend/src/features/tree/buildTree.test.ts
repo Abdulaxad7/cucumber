@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {buildTree, flattenFiles, type TreeNode} from './buildTree';
+import {fileRowText} from './FeatureTree';
 import {address, legacy, payment, summary} from '../../test/fixtures/scenario';
 
 function shape(nodes: TreeNode[]): unknown[] {
@@ -44,5 +45,16 @@ describe('buildTree', () => {
             'features/checkout/payment.feature',
             'features/legacy.feature',
         ]);
+    });
+});
+
+// FE-QA-3 / F12: the feature's name is the primary text; an empty name falls back to the file name.
+describe('fileRowText', () => {
+    it('shows the name first, with the file name as secondary text', () => {
+        expect(fileRowText('Payment', 'payment.feature')).toEqual({label: 'Payment', secondary: 'payment.feature'});
+    });
+
+    it.each(['', '   '])('falls back to the file name when the name is %j', (name) => {
+        expect(fileRowText(name, 'untitled.feature')).toEqual({label: 'untitled.feature', secondary: undefined});
     });
 });

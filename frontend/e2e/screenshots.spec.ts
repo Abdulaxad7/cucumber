@@ -6,7 +6,9 @@ import {expect, test, type Page, type Route} from '@playwright/test';
 import type {components} from '../src/api/generated/auth-service';
 import {acme, anaCredentials, authProblem, gatewayProblem, ids} from '../src/test/fixtures/auth';
 import {FakeBackend} from '../src/test/fixtures/fakeBackend';
+import {users as fixtureUsers, type UserKey} from '../src/test/fixtures/workspace';
 import {detail, payment, paymentSourceV3, scenarioProblem} from '../src/test/fixtures/scenario';
+import {runIds} from '../src/test/fixtures/report';
 
 type S = components['schemas'];
 
@@ -66,6 +68,8 @@ async function world(page: Page, orgsMode: OrgsMode = 'ready') {
         }
         if (path === `/api/orgs/${ids.acme}/projects`) return json(route, 200, projects);
         if (path === `/api/orgs/${ids.acme}/members`) return json(route, 200, members);
+        // The features page (batch B) lists features and tags; this batch A world has none.
+        if (path === `/api/projects/${ids.checkout}/features` || path === `/api/projects/${ids.checkout}/tags`) return json(route, 200, []);
         return json(route, 404, gatewayProblem(404, path), problemJson);
     });
 }
@@ -241,6 +245,236 @@ for (const theme of ['light', 'dark'] as const) {
             await page.getByRole('button', {name: 'Reload latest version'}).click();
             await expect(page.getByRole('region', {name: 'Your unsaved text'})).toBeVisible();
             await shot('editor', 'reloaded-with-unsaved-text');
+
+            // Batch C (F7): the History and Test cases tabs.
+            await page.getByRole('tab', {name: 'History'}).click();
+            await expect(page.getByRole('grid', {name: 'Versions'})).toBeVisible();
+            await shot('editor', 'history');
+            await page.getByRole('button', {name: 'Open version 1'}).click();
+            await expect(page.getByText(/Version 1 of \d/)).toBeVisible();
+            await shot('editor', 'history-version');
+            await page.getByRole('tab', {name: 'Test cases'}).click();
+            await expect(page.getByRole('grid', {name: 'Test cases'})).toBeVisible();
+            await shot('editor', 'test-cases');
+        });
+    }
+}
+
+// Batch C (additive): organizations, invitations and projects.
+function jwtFor(user: UserKey): string {
+    const now = Math.floor(Date.now() / 1000);
+    return `${base64url(JSON.stringify({alg: 'HS512', typ: 'JWT'}))}.${base64url(JSON.stringify({sub: fixtureUsers[user].id, email: fixtureUsers[user].email, exp: now + 3600}))}.c2ln`;
+}
+
+for (const theme of ['light', 'dark'] as const) {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+        test(`screenshots, batch C, ${theme}, ${width}`, async ({browser}) => {
+            test.setTimeout(180_000);
+            const shoot = async (user: UserKey | null, backend: FakeBackend, run: (page: Page, shot: (screen: string, state: string) => Promise<void>) => Promise<void>) => {
+                const context = await browser.newContext({viewport: {width, height}});
+                const page = await context.newPage();
+                await page.addInitScript((value) => localStorage.setItem('cucumber.ui.theme', value), theme);
+                if (user) await page.addInitScript((jwt) => sessionStorage.setItem('cucumber.session', jwt), jwtFor(user));
+                await page.route('**/api/**', async (route) => {
+                    const request = route.request();
+                    const raw = request.postData();
+                    const answer = backend.answer(request.method(), new URL(request.url()), raw ? JSON.parse(raw) : null);
+                    if (!answer) return route.abort();
+                    if (answer.status === 204) return route.fulfill({status: 204});
+                    return route.fulfill({status: answer.status, contentType: answer.contentType, body: JSON.stringify(answer.body)});
+                });
+                const shot = async (screen: string, state: string) => {
+                    await settle(page);
+                    await expect(page.locator('[data-entering]')).toHaveCount(0);
+                    await page.screenshot({path: `${outDir}${screen}-${state}-${theme}-${width}.png`, fullPage: true, animations: 'disabled', caret: 'hide'});
+                };
+                await run(page, shot);
+                await context.close();
+            };
+
+            const ana = new FakeBackend('ana');
+            ana.auth.members.set(ids.acme, (ana.auth.members.get(ids.acme) ?? []).filter((m) => m.userId !== fixtureUsers.dan.id));
+            ana.auth.invitations.set(ids.acme, [
+                {id: '0c0c0c0c-0000-4000-8000-000000000001', email: 'ivy@example.com', role: 'MEMBER', status: 'PENDING', createdAt: '2026-11-01T10:00:00Z', expiresAt: '2099-11-08T10:00:00Z'},
+            ]);
+            await shoot('ana', ana, async (page, shot) => {
+                await page.goto(`/orgs/${ids.acme}/members`);
+                await expect(page.getByText('ivy@example.com')).toBeVisible();
+                await shot('org-members', 'admin');
+                await page.getByRole('button', {name: /Role for Gus Underwood/}).click();
+                await expect(page.getByRole('listbox')).toBeVisible();
+                await shot('org-members', 'role-menu-open');
+                await page.keyboard.press('Escape');
+                ana.auth.invitations.set(ids.acme, []);
+                await page.reload();
+                await page.getByRole('button', {name: 'Invite'}).click();
+                await page.getByRole('dialog', {name: 'Invite a member'}).getByLabel('Email').fill('fay@example.com');
+                await shot('org-members', 'invite-dialog');
+                await page.getByRole('button', {name: 'Send invitation'}).click();
+                await expect(page.getByRole('dialog', {name: 'Share the invitation link'})).toBeVisible();
+                await shot('org-members', 'token-dialog');
+                await page.getByRole('button', {name: 'Done'}).click();
+
+                await page.goto(`/orgs/${ids.acme}/projects`);
+                await expect(page.getByRole('link', {name: 'Checkout'})).toBeVisible();
+                await shot('projects', 'admin');
+                await page.getByRole('button', {name: 'Create project'}).click();
+                await page.getByRole('dialog', {name: 'Create project'}).getByLabel('Project name').fill('checkout');
+                await page.getByRole('dialog', {name: 'Create project'}).getByRole('button', {name: 'Create project'}).click();
+                await expect(page.getByText('A project with this name already exists')).toBeVisible();
+                await shot('projects', 'create-name-taken');
+                await page.keyboard.press('Escape');
+
+                await page.goto(`/projects/${ids.checkout}/settings`);
+                await expect(page.getByLabel('Project name')).toBeVisible();
+                await shot('project-settings', 'admin');
+                await page.goto(`/projects/${ids.checkout}/members`);
+                await expect(page.getByText('Hal Jordan', {exact: true})).toBeVisible();
+                await shot('project-members', 'admin');
+                await page.getByRole('button', {name: 'Add member'}).click();
+                await expect(page.getByRole('dialog', {name: 'Add a project member'})).toBeVisible();
+                await shot('project-members', 'add-dialog');
+                await page.keyboard.press('Escape');
+
+                await page.goto(`/projects/${ids.checkout}/settings`);
+                await page.getByRole('button', {name: 'Archive project'}).click();
+                await page.getByRole('alertdialog').getByRole('button', {name: 'Archive project'}).click();
+                await expect(page.getByText('Project archived: read only')).toBeVisible();
+                await shot('project-settings', 'archived');
+
+                await page.goto('/orgs/new');
+                await shot('org-create', 'default');
+            });
+
+            await shoot('gus', new FakeBackend('gus'), async (page, shot) => {
+                await page.goto(`/orgs/${ids.acme}/members`);
+                await expect(page.getByText('Ana Ruiz')).toBeVisible();
+                await shot('org-members', 'member');
+                await page.goto(`/projects/${ids.checkout}/settings`);
+                await expect(page.getByText(/Read only: your role is/)).toBeVisible();
+                await shot('project-settings', 'read-only');
+            });
+
+            const fay = new FakeBackend(null);
+            fay.auth.tokens.set('tok-123', {token: 'tok-123', orgId: ids.acme, email: 'fay@example.com', role: 'MEMBER'});
+            await shoot(null, fay, async (page, shot) => {
+                await page.goto('/invite#tok-123');
+                await expect(page.getByLabel('Full name')).toBeVisible();
+                await shot('invite', 'form');
+                await page.getByLabel('Full name').fill('Fay Lin');
+                await page.getByLabel('Password').fill('Secret123!');
+                await page.getByRole('button', {name: 'Accept invitation'}).click();
+                await expect(page.getByText('You joined Acme as MEMBER')).toBeVisible();
+                await shot('invite', 'joined');
+                await page.goto('/invite');
+                await expect(page.getByText("This invitation link isn't valid.")).toBeVisible();
+                await shot('invite', 'invalid');
+            });
+        });
+    }
+}
+
+// Batch D (additive): runs, the dashboard, results, manual runs and upload tokens.
+for (const theme of ['light', 'dark'] as const) {
+    for (const [width, height] of [[1440, 900], [390, 844]] as const) {
+        test(`screenshots, batch D, ${theme}, ${width}`, async ({browser}) => {
+            test.setTimeout(180_000);
+            const shoot = async (user: UserKey, backend: FakeBackend, run: (page: Page, shot: (screen: string, state: string) => Promise<void>) => Promise<void>) => {
+                const context = await browser.newContext({viewport: {width, height}});
+                const page = await context.newPage();
+                await page.addInitScript((value) => localStorage.setItem('cucumber.ui.theme', value), theme);
+                await page.addInitScript((jwt) => sessionStorage.setItem('cucumber.session', jwt), jwtFor(user));
+                await page.route('**/api/**', async (route) => {
+                    const request = route.request();
+                    const raw = request.postData();
+                    const answer = backend.answer(request.method(), new URL(request.url()), raw ? JSON.parse(raw) : null);
+                    if (!answer) return route.abort();
+                    if (answer.status === 204) return route.fulfill({status: 204});
+                    return route.fulfill({status: answer.status, contentType: answer.contentType, body: JSON.stringify(answer.body)});
+                });
+                const shot = async (screen: string, state: string) => {
+                    await settle(page);
+                    await expect(page.locator('[data-entering]')).toHaveCount(0);
+                    await page.waitForTimeout(300);
+                    await page.screenshot({path: `${outDir}${screen}-${state}-${theme}-${width}.png`, fullPage: true, animations: 'disabled', caret: 'hide'});
+                };
+                await run(page, shot);
+                await context.close();
+            };
+            const runsPath = `/projects/${ids.checkout}/runs`;
+
+            const gus = new FakeBackend('gus');
+            gus.report.addManyRuns(8);
+            await shoot('gus', gus, async (page, shot) => {
+                await page.goto(runsPath);
+                await expect(page.locator('[role=img] svg').first()).toBeVisible();
+                await shot('runs', 'dashboard');
+                await page.getByRole('button', {name: /^Show as a table\s*:\s*results by run$/}).click();
+                await page.getByRole('button', {name: /^Show as a table\s*:\s*pass rate$/}).click();
+                await shot('runs', 'chart-tables');
+                await page.getByRole('button', {name: 'Plan manual run'}).click();
+                const dialog = page.getByRole('dialog', {name: 'Plan a manual run'});
+                await dialog.getByLabel('Run name').fill('Sprint 13');
+                await dialog.getByText('features/checkout/payment.feature').click();
+                await dialog.getByText('features/checkout/address.feature').click();
+                await dialog.getByLabel('Environment (optional)').fill('staging');
+                await shot('runs', 'plan-dialog');
+                gus.report.overrides.set(`POST /api/projects/${ids.checkout}/runs`, {
+                    status: 422,
+                    contentType: 'application/problem+json',
+                    body: {type: 'about:blank', title: 'x', status: 422, detail: 'd', instance: '/x', code: 'FEATURE_NOT_PLANNABLE', featureIds: [payment.id]},
+                });
+                await dialog.getByRole('button', {name: 'Plan run'}).click();
+                await expect(dialog.getByText("Can't be planned", {exact: true})).toBeVisible();
+                await shot('runs', 'plan-not-plannable');
+                await page.keyboard.press('Escape');
+
+                await page.goto(`${runsPath}/${runIds.nightly}`);
+                await expect(page.getByRole('region', {name: 'Run summary'})).toBeVisible();
+                await shot('run', 'summary');
+                await page.getByRole('tab', {name: 'Results'}).click();
+                await expect(page.getByRole('grid', {name: 'Results'})).toBeVisible();
+                await shot('run', 'results');
+                await page.getByRole('button', {name: 'Open Pay by voucher'}).click();
+                const result = page.getByRole('dialog', {name: 'Pay by voucher'});
+                await result.getByRole('button', {name: 'Show error'}).click();
+                await shot('run', 'result-error');
+            });
+
+            await shoot('hal', new FakeBackend('hal'), async (page, shot) => {
+                await page.goto(`${runsPath}/${runIds.sprint12}`);
+                await page.getByRole('tab', {name: 'Results'}).click();
+                await page.getByRole('button', {name: 'Record Pay by voucher'}).click();
+                const dialog = page.getByRole('dialog', {name: 'Pay by voucher'});
+                await dialog.getByRole('radio', {name: 'Failed'}).click();
+                await dialog.getByLabel('Comment (optional)').fill('Card declined');
+                await shot('run', 'record-dialog');
+            });
+
+            const empty = new FakeBackend('ana');
+            empty.report.runs.clear();
+            await shoot('ana', empty, async (page, shot) => {
+                await page.goto(runsPath);
+                await expect(page.getByText('No runs yet')).toBeVisible();
+                await shot('runs', 'empty-admin');
+                await page.goto(`/projects/${ids.checkout}/upload-tokens`);
+                await expect(page.getByText('No upload tokens yet')).toBeVisible();
+                await shot('tokens', 'empty');
+                await page.getByRole('button', {name: 'Create token'}).click();
+                await page.getByRole('dialog', {name: 'Create an upload token'}).getByLabel('Token name').fill('GitHub Actions');
+                await page.getByRole('dialog', {name: 'Create an upload token'}).getByRole('button', {name: 'Create token'}).click();
+                await expect(page.getByRole('dialog', {name: 'Copy your upload token'})).toBeVisible();
+                await shot('tokens', 'shown-once');
+                await page.getByRole('button', {name: 'Done'}).click();
+                await page.getByRole('button', {name: 'Create token'}).click();
+                await page.getByRole('dialog', {name: 'Create an upload token'}).getByLabel('Token name').fill('Jenkins');
+                await page.getByRole('dialog', {name: 'Create an upload token'}).getByRole('button', {name: 'Create token'}).click();
+                await page.getByRole('button', {name: 'Done'}).click();
+                await page.getByRole('button', {name: 'Revoke Jenkins'}).click();
+                await page.getByRole('alertdialog').getByRole('button', {name: 'Revoke token'}).click();
+                await expect(page.getByRole('grid', {name: 'Upload tokens'})).toContainText('Revoked');
+                await shot('tokens', 'list');
+            });
         });
     }
 }

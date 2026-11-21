@@ -1,9 +1,15 @@
 import {useEffect, useRef} from 'react';
 import {defaultKeymap, history, historyKeymap} from '@codemirror/commands';
-import {lintKeymap, openLintPanel, setDiagnostics, type Diagnostic} from '@codemirror/lint';
+import {lintKeymap, setDiagnostics, type Diagnostic} from '@codemirror/lint';
 import {Compartment, EditorState} from '@codemirror/state';
 import {drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers} from '@codemirror/view';
+import {offsetFor} from './columns';
 import {gherkinLanguage} from './gherkin';
+
+/** Lets the problems panel move the cursor to a (line, column) in the current document. */
+export interface GherkinEditorHandle {
+    goTo: (line: number, column: number) => void;
+}
 
 export interface GherkinEditorProps {
     /** Changing the key replaces the document with `initialDoc` (a load or a reload). */
@@ -16,6 +22,8 @@ export interface GherkinEditorProps {
     describedBy?: string;
     onChange: (doc: string) => void;
     onSave: () => void;
+    /** Receives the handle once the view exists. */
+    handleRef?: { current: GherkinEditorHandle | null };
 }
 
 function readOnlyExtension(readOnly: boolean) {
@@ -23,7 +31,7 @@ function readOnlyExtension(readOnly: boolean) {
 }
 
 /** D11: CodeMirror 6 with the Gherkin mode; Ctrl/Cmd+S saves; F8 moves to the next diagnostic. */
-export function GherkinEditor({docKey, initialDoc, readOnly, diagnostics, label, describedBy, onChange, onSave}: GherkinEditorProps) {
+export function GherkinEditor({docKey, initialDoc, readOnly, diagnostics, label, describedBy, onChange, onSave, handleRef}: GherkinEditorProps) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const readOnlyCompartment = useRef(new Compartment());
@@ -73,6 +81,15 @@ export function GherkinEditor({docKey, initialDoc, readOnly, diagnostics, label,
             }),
         });
         viewRef.current = view;
+        if (handleRef) {
+            handleRef.current = {
+                goTo(line, column) {
+                    const pos = offsetFor(view.state.doc.toString(), line, column);
+                    view.dispatch({selection: {anchor: pos}, scrollIntoView: true});
+                    view.focus();
+                },
+            };
+        }
         return () => {
             view.destroy();
             viewRef.current = null;
@@ -88,7 +105,6 @@ export function GherkinEditor({docKey, initialDoc, readOnly, diagnostics, label,
         const view = viewRef.current;
         if (!view) return;
         view.dispatch(setDiagnostics(view.state, [...diagnostics]));
-        if (diagnostics.length > 0) openLintPanel(view);
     }, [diagnostics, docKey]);
 
     return <div ref={hostRef} className="gherkin-editor h-full min-h-0"/>;

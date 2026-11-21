@@ -21,7 +21,10 @@ import {errorText} from '../../ui/errorText';
 import {showToast} from '../../ui/toastStore';
 import {uiStrings} from '../../ui/strings';
 import {gherkinSummary, toDiagnostics} from './columns';
-import {GherkinEditor} from './GherkinEditor';
+import {GherkinEditor, type GherkinEditorHandle} from './GherkinEditor';
+import {ProblemsPanel} from './ProblemsPanel';
+import {HistoryPanel} from '../history/HistoryPanel';
+import {TestCasesPanel} from '../history/TestCasesPanel';
 import {editorStrings as t} from './strings';
 
 type Feature = components['schemas']['Feature'];
@@ -70,6 +73,8 @@ export function FeatureEditor({projectId, featureId, project, onClose}: FeatureE
     const [loadedSource, setLoadedSource] = useState('');
     const [loadedPath, setLoadedPath] = useState('');
     const [diagnostics, setDiagnosticsState] = useState<Diagnostic[]>([]);
+    const [problems, setProblems] = useState<{errors: ParseError[]; source: string}>({errors: [], source: ''});
+    const editorHandle = useRef<GherkinEditorHandle | null>(null);
     const [live, setLive] = useState('');
     const [fieldErrors, setFieldErrors] = useState<Partial<Record<Field, string[]>>>({});
     const [formError, setFormError] = useState<UiError | null>(null);
@@ -86,6 +91,7 @@ export function FeatureEditor({projectId, featureId, project, onClose}: FeatureE
         setBaseVersion(f.currentVersion);
         setDocKey(`${f.id}:${f.currentVersion}:${Date.now()}`);
         setDiagnosticsState([]);
+        setProblems({errors: [], source: ''});
         setFieldErrors({});
         setFormError(null);
     }
@@ -144,6 +150,7 @@ export function FeatureEditor({projectId, featureId, project, onClose}: FeatureE
             if (ui.code === 'GHERKIN_INVALID' && problem) {
                 const errors: ParseError[] = problem.parseErrors;
                 setDiagnosticsState(toDiagnostics(draft.source, errors));
+                setProblems({errors, source: draft.source});
                 setLive(gherkinSummary(errors));
             } else if (ui.code === 'VERSION_CONFLICT') {
                 setConflictVersion(problem?.currentVersion ?? baseVersion + 1);
@@ -166,6 +173,7 @@ export function FeatureEditor({projectId, featureId, project, onClose}: FeatureE
         if (readOnly || save.isPending || !feature) return;
         // Diagnostics stay until the next save attempt (D11).
         setDiagnosticsState([]);
+        setProblems({errors: [], source: ''});
         setLive('');
         setFieldErrors({});
         setFormError(null);
@@ -365,16 +373,22 @@ export function FeatureEditor({projectId, featureId, project, onClose}: FeatureE
                                     describedBy={describedBy}
                                     onChange={(source) => setDraft((d) => ({...d, source}))}
                                     onSave={onSave}
+                                    handleRef={editorHandle}
                                 />
                             ) : null}
                         </div>
+                        <ProblemsPanel
+                            errors={problems.errors}
+                            source={problems.source}
+                            onGoTo={(line, column) => editorHandle.current?.goTo(line, column)}
+                        />
                     </div>
                 </TabPanel>
                 <TabPanel id="history">
-                    <p className="p-4 text-base text-text-muted">{t.laterBatch}</p>
+                    <HistoryPanel projectId={projectId} featureId={featureId} orgId={project?.orgId ?? null}/>
                 </TabPanel>
                 <TabPanel id="test-cases">
-                    <p className="p-4 text-base text-text-muted">{t.laterBatch}</p>
+                    <TestCasesPanel projectId={projectId} featureId={featureId}/>
                 </TabPanel>
             </Tabs>
 

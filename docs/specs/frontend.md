@@ -1,6 +1,6 @@
 # frontend phase 1: web UI
 
-Status: **Ready** (the user approved the spec, stack option A, and Q1–Q4 as recommended, including SE1, on 2026-11-02).
+Status: **Accepted with follow-ups** (pm, 2026-11-21; see Acceptance). Approved earlier as Ready (the user approved the spec, stack option A, and Q1–Q4 as recommended, including SE1, on 2026-11-02). Implementation completed at review point E (2026-11-21).
 **Batch B is paused** (user, 2026-11-03) until F11, the design foundation in batch DS, passes review point DS. QD1–QD3
 were answered on 2026-11-05: **F11 is ready to start.**
 Last updated: 2026-11-03 (visual design DS-1 to DS-12, US-10, batch DS with F11, FE1; batches B–E use the design
@@ -732,7 +732,7 @@ Scenario Outline: Columns on non-ASCII lines (D12, SE1)
   Examples:
     | line                    | column | char |
     | "  Scénario: Pay"       | 13     | "P"  |
-    | "  Scenario: 💳 Pay"    | 16     | "P"  |
+    | "  Scenario: 💳 Pay"    | 15     | "P"  |
     | "  Scenario: Pay"       | 99     | end of line |
 
 @US-6 @AC-6.4 @P0
@@ -792,7 +792,7 @@ Scenario: Test cases
 Scenario: Runs list and dashboard
   When Dan opens Checkout's runs
   Then he sees "Sprint 12" and "Nightly" newest first, with status, total and pass rate ("Nightly": 50.0%)
-  And the chart of counts and the pass-rate line each have a "Show as table" alternative with the same numbers
+  And the chart of counts and the pass-rate line each have a "Show <chart> as a table" alternative with the same numbers (amended 2026-11-21, FE-QA-4)
   And "Next page" requests page 1 with size 20
 
 @US-8 @AC-8.2 @P1
@@ -1158,6 +1158,27 @@ interactively. Batch B starts only after the user approves.
   AC-5.5 needs.
 
 **Review point B:** the editor's conflict and error handling, and the keyboard journey.
+- **Reached 2026-11-09:** F3 and F4 are done.
+  - Verified by the main session: lint, typecheck and build pass; vitest 318/0/0.
+  - Per frontend-swe: e2e 43/1 (the failure is the AC-10.2 desktop fixture gap, below); 102 screenshots; initial JS about 199 KB gzip, with the tree and editor lazy-loaded.
+- **AC-6.3 row 2 corrected to column 15** (pm, 2026-11-09): scenario-service 1.0.7 counts code points; 16 was the UTF-16 count.
+- **User decisions (2026-11-09):**
+  - **Fixture-only addition allowed:** `e2e/design.spec.ts` `gusWorld` gets features `[]` and tags `[]`.
+  - **Polish round before batch C:**
+    - the parse-error panel is restyled with the tokens, in both themes: a problem count, then one row per error with a `line:column` chip, a readable message and click-to-go-to-line;
+    - the tree-row badges no longer clip, and long names truncate cleanly;
+    - general polish from the screenshots.
+  - Then **batch C is approved to start**, without another stop.
+- **Deviations, all accepted by pm:**
+  - **RV-B1:** the AC-6.3 discrepancy in the spec, now corrected above.
+  - **RV-B2:** the features route was changed rather than added to.
+  - **RV-B3:** the visible "Tag filter" line; AC-1.4's assertion is unchanged.
+  - **RV-B4:** react-aria's Tree renders `role="treegrid"`.
+  - **RV-B5:** the Toast region is mounted on the features page for now (FU-F7).
+  - **RV-B6:** Gherkin token colours come from a decoration plugin, which avoids adding `@lezer/highlight`.
+  - **RV-B7:** the lint panel takes focus after a 422, and Escape returns focus to the editor.
+  - **RV-B8:** the AC-5.5 and editor e2e tests were written alongside the components; the unit test-first rows were red first. Later tasks write their e2e test-first rows first.
+  - **RV-B9:** axe waits for overlay animations to finish before scanning.
 
 ### Batch C: organizations, projects, history (review point C)
 
@@ -1191,6 +1212,20 @@ interactively. Batch B starts only after the user approves.
 - **Test first:** AC-7.1's 404 version.
 
 **Review point C.**
+- **Reached 2026-11-09:**
+  - Done: the review point B polish (the ProblemsPanel replaces CodeMirror's panel; tree-row clipping; other fixes) and batch C (F5, F6, F7).
+  - Verified by the main session: lint, typecheck and build pass; vitest 385/0/0.
+  - Per frontend-swe: e2e 67/0/0, axe 0 violations in both themes, 166 screenshots.
+- **Approved additions to Allowed files (user, 2026-11-09):**
+  - `src/features/editor/FeatureEditor.tsx`: render `HistoryPanel` and `TestCasesPanel` in the existing tabs (AC-7.1, AC-7.2);
+  - `src/auth/session.ts`: `rememberInvite`, `takeInvite` and `forgetInvite`, backed by `sessionStorage` `cucumber.pendingInvite` per D14. This supersedes RV-C1's in-memory approach;
+  - `src/app/Shell.tsx`: after a lazy route resolves, focus moves to its h1, falling back to `main` (AC-9.2).
+- **Batch D** is approved to start after these (user, 2026-11-09).
+- **Deviations accepted by pm:**
+  - **RV-C2:** "On Payments with ADMIN" lands on Settings, which shows the role; the org role badge is in the projects header.
+  - **RV-C3:** the fake auth-service applies the contract's project-visibility rules.
+  - **RV-C4:** the projects page loads eagerly.
+  - **RV-C5:** frontend-swe's own batch B tests now target the ProblemsPanel and the trimmed message, with longer editor cold-start waits. These are test-only changes with no weakened assertion.
 
 ### Batch D: runs and results (review point D)
 
@@ -1215,6 +1250,22 @@ interactively. Batch B starts only after the user approves.
 - **Test first:** AC-8.6's outline; AC-8.5: the token is gone from the DOM after the dialog closes.
 
 **Review point D.**
+- **Reached 2026-11-21:**
+  - Done: the three items approved at review point C (History and Test cases wired in; the invite token in `sessionStorage` per D14; h1 focus after lazy routes) and batch D (F8, F9).
+  - Verified by the main session: lint, typecheck and build pass; vitest 433/0/0; 222 screenshots.
+  - Per frontend-swe: e2e 81/0/0, axe 0 violations in both themes, initial JS 200.6 KB gzip.
+  - Chromium was reinstalled after its cache was cleared, as the 2026-11-02 decision allows.
+- **User decisions (2026-11-21):**
+  - **Approved addition to Allowed files:** `src/api/problem.ts` may parse report-service's `featureIds` member, to complete AC-8.3's per-feature marking.
+  - **UX change:** the org and project "Members" sidebar items get labels that tell them apart (DS-7 and AC-10.2 follow the new labels). Selector-only test changes are allowed if needed.
+  - **Batch E** is approved to start after these two.
+- **Deviations accepted by pm:**
+  - **RV-D1:** the feature picker is a numbered checkbox list, not a checkbox tree.
+  - **RV-D2:** the runs table has no column sorting, because `listRuns` has no sort parameter.
+  - **RV-D3:** each chart has its own label, and the "Show as a table" toggle carries the numbers (WCAG 2.5.3 naming).
+  - **RV-D4:** chart series use the DS-2 status text colours.
+  - **RV-D5:** step errors sit behind "Show error".
+  - **RV-D6 (test change):** in frontend-swe's own batch C test, one assertion changed from "`sessionStorage` is empty" to "only `cucumber.pendingInvite` remains", as the D14 change requires.
 
 ### Batch E: accessibility, end to end, docs (review point E)
 
@@ -1228,6 +1279,68 @@ interactively. Batch B starts only after the user approves.
 - **Done when:** the axe report lists 0 violations per route, and the manual run's steps and results are in the handoff.
 
 **Review point E**, then qa.
+- **Reached 2026-11-21. Implementation is complete, and qa verification has started.**
+- **Done:**
+  - AC-8.3 completed: `problem.ts` reads `featureIds`;
+  - sidebar section headings tell the org and project "Members" items apart;
+  - F10: an axe sweep of 29 routes × 2 themes × 2 widths with 0 violations, the README, and the real-stack Success journey.
+- **Backend rebuild:** backend-swe rebuilt all four jars on 2026-11-21 with no code changes. Builds verified by the main session: auth-service 2109/0/0, scenario-service 927/0/1, report-service 798/0/0, gateway 545/0/3.
+- **Real-stack journey:** 1/1 passed through the real gateway and services, with no backend errors and full teardown. It covered:
+  - register, invite, accept;
+  - project members;
+  - creating a feature, an inline 422 marker, fixing it and saving;
+  - planning a run, recording results, completing it;
+  - the reader view.
+- **Verified by the main session:** lint, typecheck and build pass; vitest 437/0/0; 14 `real-*` screenshots; nothing left running. Per frontend-swe: e2e 197/0/0, run twice.
+- **Bug found and fixed test-first:** in `Shell.tsx`, the wait to focus the h1 could take focus from a user who had already started tabbing. The test change is an added wait in `e2e/editor.spec.ts`, with no assertion changed.
+- **Deviations accepted by pm:**
+  - **RV-E1:** the sidebar links still read "Members"; the section headings and fuller names in the collapsed sidebar tell them apart. AC-10.2 checks the exact text.
+  - **RV-E2:** one axe report per test worker.
+  - **RV-E3:** the real-journey files live under `e2e/real/`, with their own config.
+  - **RV-E4:** the journey ran before the focus fix; it is click-driven, so the fix doesn't affect it.
+  - **RV-E5:** the "Feature created" toast briefly overlaps the problems panel; folded into FU-F7.
+
+### Fix round 1 (user decisions 2026-11-21)
+- **qa (2026-11-21, `docs/qa/frontend-report.md`):** not signed off. 51 of 52 ACs pass; AC-5.1 (P0) fails on FE-QA-3. No S1 or S2 bug. The main session verified vitest at 637/0/0.
+- **Rules:**
+  - each fix starts with a failing test;
+  - qa's `**/qa/**` files stay read-only for frontend-swe;
+  - then qa re-verifies and pm accepts.
+
+**F12. FE-QA-3: tree rows show the feature name (AC-5.1).**
+- **Allowed files:** `src/features/tree/FeatureTree.tsx`; `src/ui/Tree.tsx` if needed; `src/features/tree/buildTree.test.ts` and `e2e/tree.spec.ts` (adding name assertions); regenerated screenshots.
+- **Behaviour:**
+  - the row's primary text is the feature's `name`, with the file name or path as secondary text;
+  - tags stay visible below 640 px, wrapping or truncating with "+N".
+- **Test first** (each red today):
+  - the payment row's text contains "Payment" and "payment.feature";
+  - at 390 px wide, `@checkout` (or "+N") is visible in the row.
+- **Stop if:** a feature with an empty `name` needs a rule. Default until then: show the file name as the primary text.
+
+**F13. FE-QA-2: a malformed invitation link and an app-wide error page.**
+- **Allowed files:** `src/features/invitations/AcceptInvitePage.tsx`; `src/app/router.tsx` (or `routes.tsx`); a new `src/app/ErrorPage.tsx`; their tests (not under `qa/`).
+- **Behaviour:**
+  - decoding the fragment is guarded: on failure, the page shows "This invitation link isn't valid." with its h1, and the fragment is removed from the address bar;
+  - the router's `defaultErrorComponent` is a design-system page with an h1, a safe message, Retry and Home links, and no stack trace or error text.
+- **Test first** (each red today): `/invite#%E0%A4%A`, `/invite#%` and `/invite#%ZZ` each show that state with no `#` left in the URL; a route that throws during render shows `ErrorPage` and no "URI malformed" text.
+- **At re-verification:** qa turns its documented rows in `e2e/qa/security.qa.spec.ts` into assertions; that file is qa's own.
+
+**F14. FE-QA-1: axe waits for animations (test only).**
+- **Allowed files:** `e2e/design.spec.ts`.
+- **Change:** wait for `[data-entering]` to clear before each `analyze()`.
+- **Test first:** none, because this fixes a test race. Done when `--repeat-each=20` on the axe block passes.
+
+**FE-QA-4: accepted and closed.** AC-8.1 is amended to "Show <chart> as a table".
+
+**Done 2026-11-21:**
+- F12, F13 and F14 are done; qa re-verified them (FE-QA-1, FE-QA-2 and FE-QA-3 closed).
+- **FE-QA-5, fixed:** after an in-app navigation, `ErrorPage` now focuses its h1, through `Shell.tsx`'s `shouldRecoverFocus()`. Accepted deviation: its tests live in `ErrorPage.focus.test.tsx` (RV-F1).
+- **FE-QA-6 (S4), new:** Retry on the error page re-renders cached bad data instead of refetching. Recorded as FU-F9.
+
+**qa observations (pm defaults):**
+- **A 500 with a non-Problem body shows "Can't reach the server": FU-F8 (P3).** Map any 5xx with a non-Problem body to "Something went wrong" with Retry. Why: the server was reachable. It's harmless, so not urgent.
+- **An unknown `code` is treated as no code: no change.** Why: RV-A2 chose this so that new server codes degrade safely, by status.
+- **The results list doesn't poll: no change.** Why: AC-8.7 limits polling to the run detail; results still refetch on focus and after each recording.
 
 ## Non-functional requirements
 
@@ -1252,7 +1365,30 @@ interactively. Batch B starts only after the user approves.
 | FU-F4 | Refresh tokens and server-side logout                                                                                 | pm (auth-service)           | P2       |
 | FU-F5 | Production hosting, CSP and CORS origins                                                                              | pm                          | P2       |
 | FU-F6 | Move to ESLint 10 once eslint-plugin-jsx-a11y supports it (9.39.5's end-of-support warning accepted, user 2026-11-02) | frontend-swe                | P2       |
+| FU-F8 | A 5xx with a non-Problem body shows "Something went wrong", not "Can't reach the server" (qa observation, 2026-11-21) | frontend-swe | P3 |
+| FU-F9 | FE-QA-6 (S4): Retry on the error page should reset the failed queries and refetch, instead of re-rendering cached bad data. The user may choose to have it fixed now instead. | frontend-swe | P2 |
+| FU-F7 | Move the Toast region from the features page to app-wide (`App.tsx`) when a task's Allowed files include it (RV-B5); also stop the "Feature created" toast overlapping the problems panel (RV-E5) | frontend-swe | P2 |
 
 ## Acceptance
 
-Pending.
+**Accepted with follow-ups (pm, 2026-11-21).**
+- **Evidence:** `docs/qa/frontend-report.md` (the main report, "Fix round 1 re-verification" and "FE-QA-5 re-verification"). Verdict: signed off with known issues.
+  - All 52 ACs pass, including 25/25 P0. No S1–S3 bug is open; FE-QA-1 to FE-QA-5 are closed.
+  - Verified by the main session: lint, typecheck and build pass; vitest 648/0/0.
+  - Per qa: e2e 280/0/0, all mutants killed, and the real-stack journey passed in both frontend-swe's run and qa's.
+- **Note for the user:** the `real-*` screenshots predate F12, so their tree rows don't show feature names yet.
+- **Open follow-ups:**
+
+| ID | Item | Owner | Priority |
+|---|---|---|---|
+| FU-F1 | `GET /api/auth/me` (`fullName`, email) | pm (auth-service) | P2 |
+| FU-F2 | A push channel (SSE) for runs | pm | P3 |
+| FU-F3 | `listRuns` filters and trend aggregates | pm (report-service phase 2) | P2 |
+| FU-F4 | Refresh tokens and server-side logout | pm (auth-service) | P2 |
+| FU-F5 | Production hosting, CSP and CORS origins | pm | P2 |
+| FU-F6 | Move to ESLint 10 once eslint-plugin-jsx-a11y supports it | frontend-swe | P2 |
+| FU-F7 | App-wide Toast region, and no toast over the problems panel | frontend-swe | P2 |
+| FU-F8 | A 5xx with a non-Problem body shows "Something went wrong" | frontend-swe | P3 |
+| FU-F9 | Error-page Retry resets the failed queries and refetches (FE-QA-6) | frontend-swe | P2 |
+
+No refactoring candidates are open in this spec.
