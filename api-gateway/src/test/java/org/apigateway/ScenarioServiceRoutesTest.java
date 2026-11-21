@@ -51,7 +51,9 @@ class ScenarioServiceRoutesTest extends GatewayIntegrationTest {
         stubsOtherThan(SCENARIO_SERVICE).forEach(other -> assertThat(other.requests()).as(other.name()).isEmpty());
     }
 
-    /** The query's decoded parameters, sorted; empty without a query. */
+    /**
+     * The query's decoded parameters, sorted; empty without a query.
+     */
     private static List<String> parameters(String query) {
         if (query == null) {
             return List.of();
@@ -61,7 +63,7 @@ class ScenarioServiceRoutesTest extends GatewayIntegrationTest {
     }
 
     @ParameterizedTest(name = "GET {0} -> the gateway's 404")
-    @ValueSource(strings = {"/api/projects/1", "/api/projects/" + PROJECT, "/api/projects/" + PROJECT + "/runs",
+    @ValueSource(strings = {"/api/projects/1", "/api/projects/" + PROJECT, "/api/projects/" + PROJECT + "/runsx",
             "/api/projects/" + PROJECT + "/featuresx", "/api/projects/" + PROJECT + "/tags/x"})
     void otherProjectPathsAreStillNotRouted(String path) {
         // When
